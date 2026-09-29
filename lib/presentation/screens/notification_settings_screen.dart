@@ -3,244 +3,158 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../data/backend/authenticator.dart';
 import '../../data/models/user_model.dart';
-import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../theme/momentum_tokens.dart';
+import '../components/momentum_ui.dart';
 import '../providers/user_provider.dart';
 
 class NotificationSettingsScreen extends ConsumerWidget {
   const NotificationSettingsScreen({super.key});
   static const routeName = '/notification-settings';
 
+  Future<void> _update(
+    BuildContext context,
+    UserModel user,
+    NotificationSettings Function(Map<String, dynamic>) change,
+  ) async {
+    try {
+      await const Authenticator().updateNotificationSettings(
+          change(user.notificationSettings.toMap()).toMap());
+    } catch (e) {
+      if (context.mounted) showMomentumToast(context, 'Could not save: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
+    final m = context.m;
     final userAsync = ref.watch(userProfileProvider);
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: const Text('Notifications'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: theme.colorScheme.onSurface,
-      ),
-      body: userAsync.when(
-        data: (user) {
-          if (user == null)
-            return const Center(child: Text('No user profile found'));
-
-          final settings = user.notificationSettings;
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpacing.space6),
+    Widget row(UserModel user, String key, String title, String sub, String tag,
+        Color tagColor) {
+      final value = user.notificationSettings.toMap()[key] as bool;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'TASK-TRIGGERED',
-                  style: AppTypography.label.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
+                Row(children: [
+                  Flexible(
+                    child: Text(title,
+                        style: AppTypography.bodyStrong
+                            .copyWith(color: m.ink, fontSize: 14)),
                   ),
-                ),
-                const SizedBox(height: AppSpacing.space4),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Due soon reminder',
-                  'Fires at your chosen lead time (Default 30 min)',
-                  settings.dueSoon,
-                  (val) => _updateSettings(ref, user, dueSoon: val),
-                  priority: 'Critical',
-                ),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Overdue alert',
-                  '15 min grace period after due time',
-                  settings.overdue,
-                  (val) => _updateSettings(ref, user, overdue: val),
-                  priority: 'Critical',
-                ),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Morning briefing',
-                  'Daily summary of today\'s tasks at 8am',
-                  settings.morningBriefing,
-                  (val) => _updateSettings(ref, user, morningBriefing: val),
-                  priority: 'Normal',
-                ),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Evening wrap-up',
-                  'Score and rollover options at 8pm',
-                  settings.eveningWrapUp,
-                  (val) => _updateSettings(ref, user, eveningWrapUp: val),
-                  priority: 'Low',
-                ),
-                const SizedBox(height: AppSpacing.space6),
-                Text(
-                  'STREAKS & MOTIVATION',
-                  style: AppTypography.label.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.space4),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Streak at risk',
-                  '3 hours before midnight if 0 tasks done',
-                  settings.streakAtRisk,
-                  (val) => _updateSettings(ref, user, streakAtRisk: val),
-                  priority: 'Normal',
-                ),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Streak milestone',
-                  'Day of milestone (7, 14, 30, 60, 100)',
-                  settings.streakMilestone,
-                  (val) => _updateSettings(ref, user, streakMilestone: val),
-                  priority: 'Low',
-                ),
-                _buildToggleRow(
-                  context,
-                  ref,
-                  'Weekly review ready',
-                  'Sunday evening after insights generation',
-                  settings.weeklyReview,
-                  (val) => _updateSettings(ref, user, weeklyReview: val),
-                  priority: 'Low',
-                ),
+                  const SizedBox(width: 8),
+                  TagChip(tag, color: tagColor),
+                ]),
+                const SizedBox(height: 3),
+                Text(sub,
+                    style: AppTypography.caption
+                        .copyWith(color: m.inkTertiary, fontSize: 12)),
               ],
             ),
-          );
-        },
-        loading: () =>
-            const Center(child: CircularProgressIndicator.adaptive()),
-        error: (err, stack) => Center(child: Text('Error: $err')),
-      ),
-    );
-  }
-
-  Future<void> _updateSettings(
-    WidgetRef ref,
-    UserModel user, {
-    bool? dueSoon,
-    bool? overdue,
-    bool? morningBriefing,
-    bool? streakAtRisk,
-    bool? streakMilestone,
-    bool? weeklyReview,
-    bool? eveningWrapUp,
-  }) async {
-    final current = user.notificationSettings;
-    final newSettings = NotificationSettings(
-      dueSoon: dueSoon ?? current.dueSoon,
-      overdue: overdue ?? current.overdue,
-      morningBriefing: morningBriefing ?? current.morningBriefing,
-      streakAtRisk: streakAtRisk ?? current.streakAtRisk,
-      streakMilestone: streakMilestone ?? current.streakMilestone,
-      weeklyReview: weeklyReview ?? current.weeklyReview,
-      eveningWrapUp: eveningWrapUp ?? current.eveningWrapUp,
-    );
-
-    await const Authenticator().updateNotificationSettings(newSettings.toMap());
-  }
-
-  Widget _buildToggleRow(
-    BuildContext context,
-    WidgetRef ref,
-    String title,
-    String subtitle,
-    bool value,
-    ValueChanged<bool> onChanged, {
-    String? priority,
-  }) {
-    final theme = Theme.of(context);
-    Color priorityColor;
-    switch (priority?.toLowerCase()) {
-      case 'critical':
-        priorityColor = Colors.red;
-        break;
-      case 'normal':
-        priorityColor = Colors.orange;
-        break;
-      case 'low':
-        priorityColor = Colors.blue;
-        break;
-      default:
-        priorityColor = Colors.grey;
+          ),
+          Switch.adaptive(
+            value: value,
+            activeTrackColor: m.violet,
+            onChanged: (v) => _update(
+              context,
+              user,
+              (map) => NotificationSettings.fromMap({...map, key: v}),
+            ),
+          ),
+        ]),
+      );
     }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.space4),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.space4),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: AppRadius.borderRadiusLg,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        title,
-                        style: AppTypography.body.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                      if (priority != null) ...[
-                        const SizedBox(width: AppSpacing.space2),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: priorityColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                                color: priorityColor.withValues(alpha: 0.3)),
-                          ),
-                          child: Text(
-                            priority.toUpperCase(),
-                            style: AppTypography.label.copyWith(
-                              fontSize: 8,
-                              color: priorityColor,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  Text(
-                    subtitle,
-                    style: AppTypography.label.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ],
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(title: const Text('Notifications')),
+      body: Stack(children: [
+        const Positioned.fill(child: AuroraBackground()),
+        userAsync.when(
+          data: (user) {
+            if (user == null) {
+              return const Center(child: Text('No user profile found'));
+            }
+            return ListView(
+              padding: EdgeInsets.fromLTRB(
+                MomentumTokens.gutter,
+                MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                MomentumTokens.gutter,
+                40,
               ),
-            ),
-            Switch.adaptive(
-              value: value,
-              onChanged: onChanged,
-              activeTrackColor: theme.colorScheme.primary,
-            ),
-          ],
+              children: [
+                Text(
+                  'Max three a day, nothing between 22:00 and 08:00 except '
+                  'overdue alerts and the streak saver.',
+                  style: AppTypography.caption.copyWith(color: m.inkSecondary),
+                ),
+                const SizedBox(height: 18),
+                const SectionLabel('Task-triggered'),
+                const SizedBox(height: 8),
+                GlassCard(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(children: [
+                    row(
+                        user,
+                        'dueSoon',
+                        'Due soon',
+                        '30 minutes before a task is due',
+                        'CRITICAL',
+                        m.danger),
+                    row(
+                        user,
+                        'overdue',
+                        'Overdue alert',
+                        '15 minutes after — with “move to tomorrow”',
+                        'CRITICAL',
+                        m.danger),
+                    row(
+                        user,
+                        'morningBriefing',
+                        'Morning briefing',
+                        'Today’s count and overdue at 08:00',
+                        'NORMAL',
+                        m.amber),
+                    row(
+                        user,
+                        'eveningWrapUp',
+                        'Evening wrap-up',
+                        'Score at 20:00, roll the rest to tomorrow',
+                        'LOW',
+                        m.cyan),
+                  ]),
+                ),
+                const SizedBox(height: MomentumTokens.sectionGap),
+                const SectionLabel('Streaks & motivation'),
+                const SizedBox(height: 8),
+                GlassCard(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(children: [
+                    row(user, 'streakAtRisk', 'Streak at risk',
+                        '21:00 if nothing is logged today', 'NORMAL', m.amber),
+                    row(user, 'streakMilestone', 'Streak milestones',
+                        'At 7, 14, 30, 60 and 100 days', 'LOW', m.cyan),
+                    row(
+                        user,
+                        'weeklyReview',
+                        'Weekly review',
+                        'Sunday 19:00 with your week in numbers',
+                        'LOW',
+                        m.cyan),
+                  ]),
+                ),
+              ],
+            );
+          },
+          loading: () =>
+              const Center(child: CircularProgressIndicator.adaptive()),
+          error: (err, _) => Center(child: Text('Error: $err')),
         ),
-      ),
+      ]),
     );
   }
 }

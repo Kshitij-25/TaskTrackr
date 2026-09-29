@@ -1,9 +1,10 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import '../../data/backend/authenticator.dart';
+
+import 'auth_user_provider.dart';
 import 'task_provider.dart';
 
 final syncStatusProvider = StreamProvider<bool>((ref) {
-  final userId = const Authenticator().userId;
+  final userId = ref.watch(currentUidProvider);
   if (userId == null) return Stream.value(false);
 
   final repository = ref.watch(taskRepositoryProvider);

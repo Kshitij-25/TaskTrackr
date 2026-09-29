@@ -1,15 +1,30 @@
 import 'package:flutter/material.dart';
 
+/// Momentum motion tokens. Nothing animates position/opacity past 360ms.
 class AppMotion {
-  // Durations
-  static const Duration fast = Duration(milliseconds: 150);
-  static const Duration normal = Duration(milliseconds: 250);
-  static const Duration slow = Duration(milliseconds: 400);
+  static const Duration micro = Duration(milliseconds: 120);
+  static const Duration standard = Duration(milliseconds: 240);
+  static const Duration sheet = Duration(milliseconds: 360);
+  static const Duration celebrate = Duration(milliseconds: 820);
 
-  // Curves
+  static const Curve ease = Cubic(0.2, 0.85, 0.2, 1);
+  static const Curve easeCelebrate = Cubic(0.2, 0.7, 0.3, 1);
+  static const Curve easeMicro = Curves.easeOutQuint;
+
+  // Legacy names
+  static const Duration fast = micro;
+  static const Duration normal = standard;
+  static const Duration slow = sheet;
   static const Curve easeSpring = Cubic(0.34, 1.56, 0.64, 1);
-  static const Curve easeSmooth = Curves.easeInOutCubic;
+  static const Curve easeSmooth = ease;
+  static const double entrySlideOffset = 10;
 
-  // Animation values
-  static const double entrySlideOffset = 20;
+  /// True when the OS asks for reduced motion (iOS Reduce Motion,
+  /// Android "Remove animations").
+  static bool reduced(BuildContext context) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+  /// [d], or a 120ms crossfade-length duration under reduced motion.
+  static Duration of(BuildContext context, Duration d) =>
+      reduced(context) ? micro : d;
 }

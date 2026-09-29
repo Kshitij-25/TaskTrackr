@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
-import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../components/app_button.dart';
+import '../../theme/momentum_mark.dart';
+import '../../theme/momentum_tokens.dart';
+import '../components/momentum_ui.dart';
 import 'login_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -16,175 +16,264 @@ class OnboardingScreen extends StatefulWidget {
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
-  final PageController _pageController = PageController();
-  int _currentPage = 0;
+class _Page {
+  const _Page(this.eyebrow, this.title, this.body, this.cta, this.visual);
+  final String eyebrow;
+  final String title;
+  final String body;
+  final String cta;
+  final Widget Function(MomentumTokens m) visual;
+}
 
-  final List<OnboardingData> _pages = [
-    OnboardingData(
-      title: 'Stay on top of\neverything',
-      description:
-          'Capture tasks instantly, organize by priority, and never miss a deadline again.',
-      color: AppColors.primary,
-      icon: Icons.check_circle_outline,
-      buttonText: 'Get Started',
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  final _controller = PageController();
+  int _page = 0;
+
+  late final _pages = <_Page>[
+    _Page(
+      'CAPTURE',
+      'Say it the way\nyou think it.',
+      'Type “ship landing page tomorrow 2pm #work !high 45m” — the date, '
+          'project, priority and estimate parse themselves.',
+      'Continue',
+      (m) => const _CaptureVisual(),
     ),
-    OnboardingData(
-      title: 'Smart reminders\nthat fit your life',
-      description:
-          'Set reminders by time or location. TaskTrackr nudges you at just the right moment.',
-      color: AppColors.accent,
-      icon: Icons.alarm,
-      buttonText: 'Continue',
+    _Page(
+      'MOMENTUM',
+      'Every win\nbanks XP.',
+      'Tasks, habits and focus sessions level you up. One completion a day '
+          'keeps the streak alive — that is the whole game.',
+      'Continue',
+      (m) => const _HudVisual(),
     ),
-    OnboardingData(
-      title: 'Build powerful\nhabits',
-      description:
-          'Track streaks, earn rewards, and watch your productivity soar week after week.',
-      color: AppColors.success,
-      icon: Icons.local_fire_department,
-      buttonText: 'Start for free',
+    _Page(
+      'FOCUS',
+      'Protect the\nhours that matter.',
+      'A 25-minute timer that survives the lock screen, and a planner that '
+          'tells you when today is overbooked — before it is.',
+      'Get started',
+      (m) => const _RingVisual(),
     ),
   ];
 
   @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    if (_page < _pages.length - 1) {
+      if (AppMotion.reduced(context)) {
+        _controller.jumpToPage(_page + 1);
+      } else {
+        _controller.nextPage(duration: AppMotion.sheet, curve: AppMotion.ease);
+      }
+    } else {
+      context.goNamed(LoginScreen.routeName);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final m = context.m;
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Align(
-              alignment: Alignment.topRight,
-              child: TextButton(
-                onPressed: () => context.goNamed(LoginScreen.routeName),
-                child: Text(
-                  'Skip',
-                  style: AppTypography.label.copyWith(
-                      color:
-                          theme.colorScheme.onSurface.withValues(alpha: 0.4)),
-                ),
-              ),
-            ),
-            Expanded(
-              child: PageView.builder(
-                controller: _pageController,
-                onPageChanged: (index) => setState(() => _currentPage = index),
-                itemCount: _pages.length,
-                itemBuilder: (context, index) {
-                  return _OnboardingPage(data: _pages[index]);
-                },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(AppSpacing.space6),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(_pages.length, _buildDot),
-                  ),
-                  const SizedBox(height: AppSpacing.space8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: AppButton(
-                      text: _pages[_currentPage].buttonText,
-                      size: ButtonSize.large,
-                      onPressed: () {
-                        if (_currentPage < _pages.length - 1) {
-                          _pageController.nextPage(
-                            duration: AppMotion.normal,
-                            curve: AppMotion.easeSmooth,
-                          );
-                        } else {
-                          context.goNamed(LoginScreen.routeName);
-                        }
-                      },
+      body: Stack(
+        children: [
+          const Positioned.fill(child: AuroraBackground(intensity: 1.2)),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 12, 0),
+                  child: Row(children: [
+                    const MomentumLogo(size: 30),
+                    const SizedBox(width: 10),
+                    Text('TaskTrackr',
+                        style: AppTypography.heading2
+                            .copyWith(color: m.ink, fontSize: 16)),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => context.goNamed(LoginScreen.routeName),
+                      child: Text('Skip',
+                          style: AppTypography.caption.copyWith(
+                              color: m.inkSecondary,
+                              fontWeight: FontWeight.w600)),
                     ),
+                  ]),
+                ),
+                Expanded(
+                  child: PageView.builder(
+                    controller: _controller,
+                    onPageChanged: (i) => setState(() => _page = i),
+                    itemCount: _pages.length,
+                    itemBuilder: (_, i) {
+                      final p = _pages[i];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Spacer(),
+                            Center(child: p.visual(m)),
+                            const Spacer(),
+                            Text(p.eyebrow,
+                                style: AppTypography.label
+                                    .copyWith(color: m.amber)),
+                            const SizedBox(height: 10),
+                            Text(p.title,
+                                style: AppTypography.display.copyWith(
+                                    color: m.ink, fontSize: 38, height: 1.05)),
+                            const SizedBox(height: 14),
+                            Text(p.body,
+                                style: AppTypography.body
+                                    .copyWith(color: m.inkSecondary)),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+                      );
+                    },
                   ),
-                ],
-              ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                  child: Row(children: [
+                    for (var i = 0; i < _pages.length; i++)
+                      AnimatedContainer(
+                        duration: AppMotion.of(context, AppMotion.standard),
+                        margin: const EdgeInsets.only(right: 6),
+                        width: i == _page ? 26 : 8,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(4),
+                          gradient: i == _page
+                              ? LinearGradient(colors: [m.amber, m.violet])
+                              : null,
+                          color:
+                              i == _page ? null : m.ink.withValues(alpha: .15),
+                        ),
+                      ),
+                    const Spacer(),
+                    MButton(label: _pages[_page].cta, onPressed: _next),
+                  ]),
+                ),
+              ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CaptureVisual extends StatelessWidget {
+  const _CaptureVisual();
+
+  @override
+  Widget build(BuildContext context) {
+    final m = context.m;
+    Widget chip(String t, Color c) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          decoration: BoxDecoration(
+            color: m.ink.withValues(alpha: .05),
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(color: c.withValues(alpha: .4)),
+          ),
+          child: Text(t,
+              style: AppTypography.caption
+                  .copyWith(color: c, fontWeight: FontWeight.w600)),
+        );
+    return GlassCard(
+      child: SizedBox(
+        width: 300,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('ship landing page tomorrow 2pm #work !high 45m',
+                style: AppTypography.bodyStrong.copyWith(color: m.ink)),
+            const SizedBox(height: 14),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              chip('ship landing page', m.ink),
+              chip('#Work', m.violet),
+              chip('high priority', m.danger),
+              chip('45m', m.cyan),
+              chip('tomorrow', m.amber),
+              chip('2pm', m.amber),
+            ]),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildDot(int index) {
-    final theme = Theme.of(context);
-    return AnimatedContainer(
-      duration: AppMotion.fast,
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      height: 6,
-      width: _currentPage == index ? 24 : 6,
-      decoration: BoxDecoration(
-        color: _currentPage == index
-            ? _pages[_currentPage].color
-            : theme.colorScheme.onSurface.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(3),
+class _HudVisual extends StatelessWidget {
+  const _HudVisual();
+
+  @override
+  Widget build(BuildContext context) {
+    final m = context.m;
+    return GlassCard(
+      child: SizedBox(
+        width: 300,
+        child: Row(children: [
+          Column(children: [
+            GradientText('34',
+                style: AppTypography.display.copyWith(fontSize: 46)),
+            Text('DAY STREAK',
+                style: AppTypography.label
+                    .copyWith(fontSize: 9, color: m.inkTertiary)),
+          ]),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Level 12 · Keeper',
+                    style: AppTypography.bodyStrong.copyWith(color: m.ink)),
+                const SizedBox(height: 10),
+                const XpBar(progress: .78),
+                const SizedBox(height: 10),
+                Text('+40 XP per task',
+                    style: AppTypography.label
+                        .copyWith(fontSize: 9.5, color: m.amber)),
+              ],
+            ),
+          ),
+        ]),
       ),
     );
   }
 }
 
-class OnboardingData {
-  OnboardingData({
-    required this.title,
-    required this.description,
-    required this.color,
-    required this.icon,
-    required this.buttonText,
-  });
-  final String title;
-  final String description;
-  final Color color;
-  final IconData icon;
-  final String buttonText;
-}
-
-class _OnboardingPage extends StatelessWidget {
-  const _OnboardingPage({required this.data});
-  final OnboardingData data;
+class _RingVisual extends StatelessWidget {
+  const _RingVisual();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.space6),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.space8),
-            decoration: BoxDecoration(
-              color: data.color.withValues(alpha: 0.1),
-              borderRadius: AppRadius.borderRadiusXl,
-            ),
-            child: Icon(data.icon, size: 80, color: data.color),
+    final m = context.m;
+    return SizedBox(
+      width: 200,
+      height: 200,
+      child: Stack(alignment: Alignment.center, children: [
+        SizedBox.expand(
+          child: CircularProgressIndicator(
+            value: .68,
+            strokeWidth: 10,
+            strokeCap: StrokeCap.round,
+            backgroundColor: m.ink.withValues(alpha: .08),
+            valueColor: AlwaysStoppedAnimation(m.violet),
           ),
-          const SizedBox(height: AppSpacing.space12),
-          Text(
-            data.title,
-            textAlign: TextAlign.center,
-            style: AppTypography.display.copyWith(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.space4),
-          Text(
-            data.description,
-            textAlign: TextAlign.center,
-            style: AppTypography.body.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
+        ),
+        Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('17:02',
+              style:
+                  AppTypography.display.copyWith(color: m.ink, fontSize: 44)),
+          Text('IN FLOW',
+              style:
+                  AppTypography.label.copyWith(color: m.amber, fontSize: 10)),
+        ]),
+      ]),
     );
   }
 }

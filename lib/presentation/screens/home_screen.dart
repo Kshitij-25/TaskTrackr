@@ -1,228 +1,460 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../data/backend/authenticator.dart';
 import '../../data/models/task_model.dart';
-import '../../theme/app_colors.dart';
-import '../../theme/app_spacing.dart';
+import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
-import '../components/app_state_views.dart';
-import '../components/task_card.dart';
+import '../../theme/momentum_tokens.dart';
+import '../components/add_task_sheet.dart';
+import '../components/momentum_ui.dart';
+import '../components/plan_card.dart';
+import '../components/rewards.dart';
+import '../components/task_detail_sheet.dart';
+import '../components/task_row.dart';
+import '../providers/momentum_provider.dart';
 import '../providers/task_provider.dart';
-import 'profile_screen.dart';
+import '../providers/user_provider.dart';
 
+bool isSameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// Today — every block answers "what keeps the streak alive today?"
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
-  static const routeName = '/homeScreen';
+  static const routeName = '/home';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final taskListAsync = ref.watch(taskListProvider);
-    final displayName = const Authenticator().displayName;
+    final m = context.m;
+    final now = DateTime.now();
+    final tasks = ref.watch(taskListProvider).value ?? const <TaskModel>[];
+    final user = ref.watch(userProfileProvider).value;
+    final name =
+        (user?.displayName ?? const Authenticator().displayName).trim();
+    final first = name.isEmpty ? 'there' : name.split(' ').first;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SafeArea(
-        child: taskListAsync.when(
-          data: (tasks) {
-            final now = DateTime.now();
-            final todayTasks = tasks
-                .where((t) =>
-                    DateUtils.isSameDay(t.dueDate, now) && !t.isCompleted)
-                .toList();
+    final today = tasks
+        .where((t) =>
+            isSameDay(t.dueDate, now) ||
+            (!t.isCompleted && t.dueDate.isBefore(now)))
+        .toList();
+    final open = today.where((t) => !t.isCompleted).toList()
+      ..sort((a, b) => _prioRank(a).compareTo(_prioRank(b)));
+    final greeting = now.hour < 12
+        ? 'Good morning'
+        : now.hour < 18
+            ? 'Good afternoon'
+            : 'Good evening';
+    final summary = open.isEmpty
+        ? (today.isEmpty
+            ? 'A clear day — capture something'
+            : 'You are clear for today')
+        : '${open.length} task${open.length == 1 ? '' : 's'} left'
+            '${open.first.estimateLabel.isEmpty ? '' : ' · ${open.first.estimateLabel} to your first win'}';
 
-            final upcomingTasks = tasks
-                .where((t) =>
-                    t.dueDate.isAfter(now) &&
-                    !DateUtils.isSameDay(t.dueDate, now) &&
-                    !t.isCompleted)
-                .toList();
+    final schedule = tasks.where((t) => isSameDay(t.dueDate, now)).toList()
+      ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
 
-            final completedToday = tasks
-                .where(
-                    (t) => DateUtils.isSameDay(t.dueDate, now) && t.isCompleted)
-                .length;
-
-            final totalToday =
-                tasks.where((t) => DateUtils.isSameDay(t.dueDate, now)).length;
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(AppSpacing.space4),
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        MomentumTokens.gutter,
+        MediaQuery.paddingOf(context).top + 14,
+        MomentumTokens.gutter,
+        130,
+      ),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildHeader(context, displayName),
-                  const SizedBox(height: AppSpacing.space6),
-                  _buildProgressCard(completedToday, totalToday),
-                  const SizedBox(height: AppSpacing.space8),
-                  if (todayTasks.isEmpty && upcomingTasks.isEmpty)
-                    const AppEmptyState(
-                      title: 'No tasks for today',
-                      subtitle: 'Enjoy your free time or plan your next goal!',
-                      iconData: Icons.wb_sunny_outlined,
-                    )
-                  else ...[
-                    if (todayTasks.isNotEmpty) ...[
-                      _buildSectionTitle(context, 'TODAY'),
-                      const SizedBox(height: AppSpacing.space4),
-                      ...todayTasks
-                          .map((task) => _buildTaskCard(context, ref, task)),
-                    ],
-                    const SizedBox(height: AppSpacing.space4),
-                    if (upcomingTasks.isNotEmpty) ...[
-                      _buildSectionTitle(context, 'UPCOMING'),
-                      const SizedBox(height: AppSpacing.space4),
-                      ...upcomingTasks
-                          .take(3)
-                          .map((task) => _buildTaskCard(context, ref, task)),
-                    ],
-                  ],
+                  Text(DateFormat('EEE d MMMM').format(now).toUpperCase(),
+                      style:
+                          AppTypography.label.copyWith(color: m.inkTertiary)),
+                  const SizedBox(height: 6),
+                  Text('$greeting, $first',
+                      style: AppTypography.heading1.copyWith(color: m.ink)),
+                  const SizedBox(height: 4),
+                  Text(summary,
+                      style: AppTypography.caption
+                          .copyWith(color: m.inkSecondary, fontSize: 13)),
                 ],
               ),
-            );
-          },
-          loading: () =>
-              const Center(child: CircularProgressIndicator.adaptive()),
-          error: (err, stack) => AppErrorState(
-            error: err.toString(),
-            onRetry: () => ref.invalidate(taskListProvider),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTaskCard(BuildContext context, WidgetRef ref, TaskModel task) {
-    return TaskCard(
-      title: task.title,
-      date: DateFormat('h:mm a').format(task.dueDate),
-      priority: task.priority,
-      category: task.category,
-      isCompleted: task.isCompleted,
-      isPending: task.isPending,
-      onToggle: (val) {
-        ref
-            .read(taskActionsProvider)
-            .toggleTaskCompletion(task.id, val ?? false);
-      },
-      onDelete: () {
-        ref.read(taskActionsProvider).deleteTask(task.id);
-      },
-    );
-  }
-
-  Widget _buildHeader(BuildContext context, String name) {
-    final theme = Theme.of(context);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Good morning 👋',
-              style: AppTypography.body.copyWith(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
             ),
-            Text(
-              name.isEmpty ? 'User' : name.split(' ')[0],
-              style: AppTypography.heading1.copyWith(
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface,
+            GestureDetector(
+              onTap: () => ref.read(mainTabProvider.notifier).state = 4,
+              child: LevelAvatar(
+                name: name,
+                photoUrl: user?.photoURL,
+                level: ref.watch(gamificationProvider) == GamificationMode.off
+                    ? null
+                    : ref.watch(momentumProvider).level,
               ),
             ),
           ],
         ),
-        InkWell(
-          onTap: () => context.pushNamed(ProfileScreen.routeName),
-          borderRadius: BorderRadius.circular(24),
-          child: CircleAvatar(
-            radius: 20,
-            backgroundColor: theme.colorScheme.primary,
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : 'U',
-              style: AppTypography.label
-                  .copyWith(color: theme.colorScheme.onPrimary),
-            ),
+        const SizedBox(height: 20),
+        const MomentumHud(),
+        const SizedBox(height: 14),
+        _QuickCapture(),
+        const PlanCard(),
+        const SizedBox(height: MomentumTokens.sectionGap),
+        SectionLabel(
+          "Today's focus",
+          trailing: GestureDetector(
+            onTap: () => ref.read(mainTabProvider.notifier).state = 1,
+            child: Text('All tasks',
+                style: AppTypography.caption
+                    .copyWith(color: m.cyan, fontWeight: FontWeight.w600)),
           ),
         ),
+        const SizedBox(height: 10),
+        if (open.isEmpty)
+          MomentumEmptyState(
+            title: today.isEmpty
+                ? 'Nothing planned yet'
+                : 'Inbox zero at ${DateFormat('HH:mm').format(now)}',
+            message: today.isEmpty
+                ? 'Capture one thing that would make today count.'
+                : 'Every task for today is done. The streak is safe.',
+            actionLabel: 'Add a task',
+            onAction: () => showAddTaskSheet(context),
+          )
+        else
+          GlassCard(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              children: [
+                for (final t in open.take(3)) TaskRow(task: t),
+              ],
+            ),
+          ),
+        if (schedule.isNotEmpty) ...[
+          const SizedBox(height: MomentumTokens.sectionGap),
+          const SectionLabel('Schedule'),
+          const SizedBox(height: 10),
+          GlassCard(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Column(
+              children: [
+                for (final t in schedule) _ScheduleRow(task: t),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: MomentumTokens.sectionGap),
+        SectionLabel(
+          'Habits',
+          trailing: GestureDetector(
+            onTap: () => ref.read(mainTabProvider.notifier).state = 3,
+            child: Text('All habits',
+                style: AppTypography.caption
+                    .copyWith(color: m.cyan, fontWeight: FontWeight.w600)),
+          ),
+        ),
+        const SizedBox(height: 10),
+        const _HabitStrip(),
       ],
     );
   }
 
-  Widget _buildProgressCard(int completed, int total) {
-    final progress = total == 0 ? 0.0 : completed / total;
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.space6),
-      decoration: BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: AppRadius.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  static int _prioRank(TaskModel t) =>
+      switch (t.priority.toLowerCase()) { 'high' => 0, 'medium' => 1, _ => 2 };
+}
+
+/// Streak + level + XP. The spine of the app.
+class MomentumHud extends ConsumerWidget {
+  const MomentumHud({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final m = context.m;
+    final s = ref.watch(momentumProvider);
+    final gamOn = ref.watch(gamificationProvider) != GamificationMode.off;
+    final now = DateTime.now();
+    final week = List.generate(
+      7,
+      (i) => s.activeOn(DateTime(now.year, now.month, now.day - (6 - i))),
+    );
+
+    return GlassCard(
+      child: Row(
         children: [
-          Text(
-            'TODAY\'S PROGRESS',
-            style: AppTypography.label.copyWith(
-              color: Colors.white.withValues(alpha: 0.8),
-              letterSpacing: 1.2,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GradientText('${s.streak}',
+                  style: AppTypography.display.copyWith(fontSize: 44)),
+              Text('DAY STREAK',
+                  style: AppTypography.label
+                      .copyWith(fontSize: 9.5, color: m.inkTertiary)),
+            ],
           ),
-          const SizedBox(height: AppSpacing.space2),
-          Text(
-            '$completed / $total tasks done',
-            style: AppTypography.heading2.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.space4),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 6,
-              backgroundColor: Colors.white.withValues(alpha: 0.2),
-              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+          const SizedBox(width: 18),
+          Container(width: 1, height: 58, color: m.stroke),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (gamOn) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('Level ${s.level} · ${s.levelName}',
+                            style: AppTypography.bodyStrong
+                                .copyWith(color: m.ink, fontSize: 13.5)),
+                      ),
+                      Text('${s.xp} / $xpPerLevel',
+                          style: AppTypography.label.copyWith(
+                              fontSize: 10,
+                              letterSpacing: .3,
+                              color: m.inkTertiary)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  XpBar(progress: s.progress),
+                ] else
+                  Text(
+                    s.activeToday
+                        ? 'Streak safe for today'
+                        : 'Finish a task, habit or focus session to keep it',
+                    style: AppTypography.bodyStrong
+                        .copyWith(color: m.ink, fontSize: 13.5),
+                  ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    for (var i = 0; i < 7; i++) ...[
+                      Expanded(
+                        child: AnimatedContainer(
+                          duration: AppMotion.of(
+                              context, const Duration(milliseconds: 300)),
+                          height: 4,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(3),
+                            color: week[i]
+                                ? m.amber.withValues(alpha: .85)
+                                : m.ink.withValues(alpha: .1),
+                          ),
+                        ),
+                      ),
+                      if (i < 6) const SizedBox(width: 4),
+                    ],
+                  ],
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildSectionTitle(BuildContext context, String title) {
-    final theme = Theme.of(context);
+class _QuickCapture extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final m = context.m;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          title,
-          style: AppTypography.label.copyWith(
-            fontWeight: FontWeight.bold,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-            letterSpacing: 1.1,
+        Expanded(
+          child: Pressable(
+            onTap: () => showAddTaskSheet(context),
+            child: Container(
+              height: 52,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: context.m.card(radius: MomentumTokens.radiusRow),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      gradient: LinearGradient(colors: [m.amber, m.violet]),
+                    ),
+                    child: const Icon(Icons.add_rounded,
+                        color: Color(0xFF0B0B12), size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Text('Add anything…',
+                      style: AppTypography.body.copyWith(color: m.inkTertiary)),
+                ],
+              ),
+            ),
           ),
         ),
-        TextButton(
-          onPressed: () {},
-          child: Text(
-            'See all',
-            style:
-                AppTypography.label.copyWith(color: theme.colorScheme.primary),
+        const SizedBox(width: 10),
+        Pressable(
+          haptic: true,
+          onTap: () => ref.read(mainTabProvider.notifier).state = 2,
+          child: Container(
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: context.m.card(radius: MomentumTokens.radiusRow),
+            child: Row(
+              children: [
+                Icon(Icons.adjust_rounded, size: 18, color: m.violet),
+                const SizedBox(width: 6),
+                Text('Focus',
+                    style: AppTypography.bodyStrong
+                        .copyWith(color: m.ink, fontSize: 13)),
+              ],
+            ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ScheduleRow extends StatelessWidget {
+  const _ScheduleRow({required this.task});
+  final TaskModel task;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = context.m;
+    final c = task.isCompleted
+        ? m.ink.withValues(alpha: .2)
+        : m.priorityColor(task.priority);
+    return Pressable(
+      onTap: () => showTaskDetail(context, task.id),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 48,
+                child: Text(DateFormat('HH:mm').format(task.dueDate),
+                    style: AppTypography.label.copyWith(
+                        fontSize: 11,
+                        letterSpacing: .3,
+                        color: m.inkSecondary)),
+              ),
+              Container(
+                width: 3,
+                decoration: BoxDecoration(
+                  color: c,
+                  borderRadius: BorderRadius.circular(3),
+                  boxShadow: m.isDark && !task.isCompleted
+                      ? [BoxShadow(color: c, blurRadius: 12)]
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(task.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.bodyStrong.copyWith(
+                          fontSize: 13.5,
+                          color: task.isCompleted ? m.inkTertiary : m.ink,
+                          decoration: task.isCompleted
+                              ? TextDecoration.lineThrough
+                              : null,
+                        )),
+                    const SizedBox(height: 2),
+                    Text(
+                      [
+                        if (task.estimateLabel.isNotEmpty) task.estimateLabel,
+                        task.category,
+                      ].join(' · '),
+                      style: AppTypography.caption
+                          .copyWith(fontSize: 11.5, color: m.inkTertiary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HabitStrip extends ConsumerWidget {
+  const _HabitStrip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final m = context.m;
+    final habits = ref.watch(habitsProvider).take(4).toList();
+    if (habits.isEmpty) {
+      return MomentumEmptyState(
+        title: 'No habits yet',
+        message: 'Small daily wins compound. Add your first one.',
+        actionLabel: 'Open habits',
+        onAction: () => ref.read(mainTabProvider.notifier).state = 3,
+      );
+    }
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+      child: Row(
+        children: [
+          for (final h in habits)
+            Expanded(
+              child: HabitToggle(
+                habit: h,
+                child: Column(
+                  children: [
+                    HabitRing(done: h.doneToday, size: 34),
+                    const SizedBox(height: 8),
+                    Text(h.short,
+                        style: AppTypography.caption.copyWith(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11.5,
+                            color: m.ink)),
+                    Text('${h.streak}d',
+                        style: AppTypography.label.copyWith(
+                            fontSize: 9.5, letterSpacing: .3, color: m.amber)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Wraps a habit visual; tap logs it with XP + burst.
+class HabitToggle extends ConsumerWidget {
+  const HabitToggle({super.key, required this.habit, required this.child});
+  final Habit habit;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        final done = ref.read(habitActionsProvider).toggleToday(habit.id);
+        if (done) {
+          final box = context.findRenderObject() as RenderBox?;
+          rewardWin(
+            context,
+            ref,
+            XpSource.habit,
+            message: 'Habit logged',
+            burstAt: box?.localToGlobal(box.size.center(Offset.zero)),
+          );
+        } else {
+          ref.read(momentumProvider.notifier).revoke(XpSource.habit);
+        }
+      },
+      child: child,
     );
   }
 }

@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:developer';
 
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_messaging/firebase_messaging.dart'
+    hide NotificationSettings;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,451 +10,477 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/task_model.dart';
+import '../models/user_model.dart';
+
+/// Everything [NotificationService.syncSchedules] needs to plan reminders.
+class ScheduleInputs {
+  const ScheduleInputs({
+    required this.tasks,
+    required this.settings,
+    required this.streak,
+    required this.activeToday,
+  });
+
+  final List<TaskModel> tasks;
+  final NotificationSettings settings;
+  final int streak;
+  final bool activeToday;
+}
 
 class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._internal();
   static final NotificationService _instance = NotificationService._internal();
-  
-  Function(String taskId)? onReschedule;
-  Function()? onRollover;
+
+  /// Tapping an overdue reminder (or its Reschedule action) → task id.
+  void Function(String taskId)? onReschedule;
+
+  /// Evening wrap-up "Roll over" action.
+  void Function()? onRollover;
+
+  /// Plain tap on a task reminder.
+  void Function(String taskId)? onOpenTask;
 
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
-  final FlutterLocalNotificationsPlugin _localNotifications =
+  final FlutterLocalNotificationsPlugin _local =
       FlutterLocalNotificationsPlugin();
+  bool _ready = false;
+  final _readyCompleter = Completer<void>();
+
+  /// Completes once local notifications are initialised.
+  Future<void> get ready => _readyCompleter.future;
+
+  // Fixed ids. Task reminders use a hashed range above these.
+  static const _idBriefing = 1001;
+  static const _idWrapUp = 1002;
+  static const _idStreakRisk = 2001;
+  static const _idMilestone = 2002;
+  static const _idWeekly = 3001;
+  static const _idFocus = 4001;
+  static const _idEngagement = 9999;
+
+  static const _milestones = [7, 14, 30, 60, 100];
 
   Future<void> initialize() async {
-    // 1. Initialize Timezone
     tz.initializeTimeZones();
-
-    // 2. Request Permission
-    NotificationSettings settings = await _fcm.requestPermission();
-
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      log('User granted permission');
-    } else {
-      log('User declined or has not accepted permission');
+    try {
+      final name = DateTime.now().timeZoneName;
+      tz.setLocalLocation(_resolveLocation(name));
+    } catch (_) {
+      // Falls back to UTC offsets via TZDateTime.from(DateTime) below.
     }
 
-    // 3. Initialize Local Notifications
-    const AndroidInitializationSettings androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    final settings = await _fcm.requestPermission();
+    log('Notification permission: ${settings.authorizationStatus}');
 
-    const DarwinInitializationSettings iosSettings =
-        DarwinInitializationSettings();
-
-    // Define Actions
-    const AndroidNotificationAction rescheduleAction =
-        AndroidNotificationAction(
-      'reschedule',
-      'Reschedule',
-      showsUserInterface: true,
+    final iosCategory = DarwinNotificationCategory(
+      'task_actions',
+      actions: [
+        DarwinNotificationAction.plain('reschedule', 'Move to tomorrow'),
+        DarwinNotificationAction.plain('rollover', 'Roll over'),
+      ],
     );
 
-    const AndroidNotificationAction rolloverAction = AndroidNotificationAction(
-      'rollover',
-      'Roll over',
-      showsUserInterface: true,
+    await _local.initialize(
+      InitializationSettings(
+        android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS: DarwinInitializationSettings(
+          notificationCategories: [iosCategory],
+        ),
+      ),
+      onDidReceiveNotificationResponse: _handleResponse,
     );
+    _ready = true;
+    if (!_readyCompleter.isCompleted) _readyCompleter.complete();
 
-    const InitializationSettings initSettings = InitializationSettings(
-      android: androidSettings,
-      iOS: iosSettings,
-    );
-
-    await _localNotifications.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: _handleNotificationAction,
-    );
-
-    // 3. Handle Foreground Messages
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      log('Got a message whilst in the foreground!');
-
-      // Fetch current settings (optional: or pass them in)
-      // For simplicity, we can show notifications if they are enabled in Firestore
-      // but usually the backend should only send if enabled.
-      // If we want device-side filtering:
-      await _showLocalNotification(message);
-    });
-
-    // 4. Get FCM Token
-    String? token = await _fcm.getToken();
-    log('FCM Token: $token');
+    FirebaseMessaging.onMessage.listen(_showRemote);
+    try {
+      // Throws on simulators and before APNs has issued a token; push is
+      // optional, local reminders don't depend on it.
+      log('FCM Token: ${await _fcm.getToken()}');
+    } catch (e) {
+      log('FCM token unavailable: $e');
+    }
   }
 
-  Future<void> _showLocalNotification(RemoteMessage message) async {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
-      'todo_reminders',
-      'Todo Reminders',
-      channelDescription: 'Notifications for task reminders',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
+  tz.Location _resolveLocation(String abbreviation) {
+    final offset = DateTime.now().timeZoneOffset;
+    for (final loc in tz.timeZoneDatabase.locations.values) {
+      final zone = loc.currentTimeZone;
+      if (zone.offset == offset.inMilliseconds &&
+          zone.abbreviation == abbreviation) {
+        return loc;
+      }
+    }
+    for (final loc in tz.timeZoneDatabase.locations.values) {
+      if (loc.currentTimeZone.offset == offset.inMilliseconds) return loc;
+    }
+    return tz.UTC;
+  }
 
-    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    const NotificationDetails platformDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-    );
-
-    await _localNotifications.show(
+  Future<void> _showRemote(RemoteMessage message) async {
+    await _local.show(
       message.notification.hashCode,
       message.notification?.title,
       message.notification?.body,
-      platformDetails,
-      payload: message.data.toString(),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'todo_reminders',
+          'Todo Reminders',
+          channelDescription: 'Notifications for task reminders',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
     );
   }
 
-  // --- Advanced Notification Logic ---
+  // ───────────────────────── Planning ─────────────────────────────────────
 
-  /// Schedules reminders for all tasks, grouping those due in the same hour
-  Future<void> scheduleAllTaskReminders(List<TaskModel> tasks) async {
-    // 1. Group tasks by their due hour
-    final Map<String, List<TaskModel>> hourlyGroups = {};
-    for (var task in tasks) {
-      if (task.isCompleted) continue;
-      final hourKey = DateFormat('yyyy-MM-dd HH').format(task.dueDate);
-      hourlyGroups.putIfAbsent(hourKey, () => []).add(task);
+  String? _lastSignature;
+
+  /// Cancels and re-plans every scheduled reminder from the current state.
+  /// Cheap to call on every task change: it no-ops when nothing relevant moved.
+  Future<void> syncSchedules(ScheduleInputs input) async {
+    if (!_ready) return;
+    final s = input.settings;
+    final open =
+        input.tasks.where((t) => !t.isCompleted && !t.isArchived).toList();
+
+    final signature = [
+      s.toMap().toString(),
+      input.streak,
+      input.activeToday,
+      DateFormat('yyyyMMddHH').format(DateTime.now()),
+      for (final t in open) '${t.id}@${t.dueDate.millisecondsSinceEpoch}',
+    ].join('|');
+    if (signature == _lastSignature) return;
+    _lastSignature = signature;
+
+    final pending = await _local.pendingNotificationRequests();
+    for (final p in pending) {
+      if (p.id != _idFocus) await _local.cancel(p.id);
     }
+    _budget.clear();
 
-    final timeFormat = DateFormat.jm();
-
-    for (var entry in hourlyGroups.entries) {
-      final hourTasks = entry.value;
-      final firstTask = hourTasks.first;
-
-      if (hourTasks.length > 1) {
-        // Grouped notification
-        final dueSoonTime = firstTask.dueDate.subtract(const Duration(minutes: 30));
-        if (dueSoonTime.isAfter(DateTime.now())) {
-          await _scheduleNotification(
-            id: entry.key.hashCode,
-            title: '${hourTasks.length} tasks due soon',
-            body: '${hourTasks.length} tasks are due by ${timeFormat.format(firstTask.dueDate.add(const Duration(minutes: 60 - 0)))}', // Roughly "by X PM"
-            scheduledTime: dueSoonTime,
+    // 1. Per-task reminders (grouped when several share an hour).
+    if (s.dueSoon || s.overdue) {
+      final groups = <String, List<TaskModel>>{};
+      for (final t in open) {
+        groups
+            .putIfAbsent(
+                DateFormat('yyyy-MM-dd HH').format(t.dueDate), () => [])
+            .add(t);
+      }
+      for (final entry in groups.entries) {
+        final tasks = entry.value;
+        if (tasks.length > 1 && s.dueSoon) {
+          final first = tasks.first;
+          await _schedule(
+            id: _taskId(entry.key),
+            title: '${tasks.length} tasks due soon',
+            body: tasks.map((t) => t.title).take(3).join(' · '),
+            at: first.dueDate.subtract(const Duration(minutes: 30)),
             priority: Priority.high,
-            type: 'due_soon_grouped',
+            type: 'due_soon',
           );
         }
-      } else {
-        // Single task notification
-        await scheduleTaskReminders(firstTask);
+        for (final t in tasks) {
+          await _scheduleTask(t,
+              dueSoon: s.dueSoon && tasks.length == 1, overdue: s.overdue);
+        }
       }
+    }
+
+    final now = DateTime.now();
+    final todayTasks = input.tasks
+        .where((t) =>
+            !t.isArchived &&
+            t.dueDate.year == now.year &&
+            t.dueDate.month == now.month &&
+            t.dueDate.day == now.day)
+        .toList();
+
+    // 2. Morning briefing, 08:00.
+    if (s.morningBriefing) {
+      final at = _nextAt(8);
+      final day = input.tasks.where((t) =>
+          !t.isCompleted &&
+          !t.isArchived &&
+          t.dueDate.year == at.year &&
+          t.dueDate.month == at.month &&
+          t.dueDate.day == at.day);
+      final overdue = open.where((t) => t.dueDate.isBefore(at)).length;
+      if (day.isNotEmpty || overdue > 0) {
+        await _schedule(
+          id: _idBriefing,
+          title: 'Morning briefing',
+          body: '${day.length} task${day.length == 1 ? '' : 's'} today'
+              '${overdue > 0 ? ' · $overdue overdue' : ''}. Start strong.',
+          at: at,
+          priority: Priority.defaultPriority,
+          type: 'briefing',
+        );
+      }
+    }
+
+    // 3. Evening wrap-up, 20:00 (opt-in).
+    if (s.eveningWrapUp && todayTasks.isNotEmpty) {
+      final done = todayTasks.where((t) => t.isCompleted).length;
+      await _schedule(
+        id: _idWrapUp,
+        title: 'Evening wrap-up',
+        body: 'You completed $done of ${todayTasks.length} today.'
+            '${done < todayTasks.length ? ' Roll the rest over to tomorrow?' : ' Clean sweep.'}',
+        at: _nextAt(20),
+        priority: Priority.low,
+        type: 'wrapup',
+        payload: 'rollover',
+        quietHours: false,
+      );
+    }
+
+    // 4. Streak at risk, 21:00 today if nothing logged yet.
+    if (s.streakAtRisk && input.streak > 0 && !input.activeToday) {
+      final at = DateTime(now.year, now.month, now.day, 21);
+      if (at.isAfter(now)) {
+        await _schedule(
+          id: _idStreakRisk,
+          title: 'Streak at risk',
+          body: 'Your ${input.streak}-day streak ends at midnight. '
+              'One task or habit keeps it alive.',
+          at: at,
+          priority: Priority.high,
+          type: 'streak_at_risk',
+          quietHours: false,
+        );
+      }
+    }
+
+    // 5. Weekly review, Sunday 19:00.
+    if (s.weeklyReview) {
+      var days = (DateTime.sunday - now.weekday) % 7;
+      if (days == 0 && now.hour >= 19) days = 7;
+      final at = DateTime(now.year, now.month, now.day + days, 19);
+      final weekStart = at.subtract(const Duration(days: 7));
+      final done = input.tasks
+          .where((t) =>
+              t.isCompleted && (t.completedAt ?? t.dueDate).isAfter(weekStart))
+          .length;
+      await _schedule(
+        id: _idWeekly,
+        title: 'Weekly review ready',
+        body: 'You completed $done task${done == 1 ? '' : 's'} this week. '
+            'See where the momentum came from.',
+        at: at,
+        priority: Priority.low,
+        type: 'weekly_review',
+      );
     }
   }
 
-  /// Schedules reminders for a specific task
-  Future<void> scheduleTaskReminders(TaskModel task) async {
-    if (task.isCompleted) return;
-
-    final timeFormat = DateFormat.jm(); // e.g. 3:00 PM
-
-    // 1. Due Soon Reminder
-    final dueSoonTime = task.dueDate.subtract(const Duration(minutes: 30));
-    if (dueSoonTime.isAfter(DateTime.now())) {
-      await _scheduleNotification(
-        id: task.id.hashCode,
-        title: '${task.title} in 30 min',
-        body: 'Due at ${timeFormat.format(task.dueDate)} • ${task.priority} priority',
-        scheduledTime: dueSoonTime,
+  Future<void> _scheduleTask(TaskModel t,
+      {required bool dueSoon, required bool overdue}) async {
+    final time = DateFormat.jm();
+    if (dueSoon) {
+      await _schedule(
+        id: _taskId(t.id),
+        title: '${t.title} in 30 min',
+        body: 'Due at ${time.format(t.dueDate)} · ${t.priority} priority',
+        at: t.dueDate.subtract(const Duration(minutes: 30)),
         priority: Priority.high,
         type: 'due_soon',
+        payload: 'task:${t.id}',
       );
     }
-
-    // 2. Overdue Alert
-    final overdueTime = task.dueDate.add(const Duration(minutes: 15));
-    if (overdueTime.isAfter(DateTime.now())) {
-      await _scheduleNotification(
-        id: task.id.hashCode + 1,
-        title: 'Past due: ${task.title}',
-        body: 'Was due at ${timeFormat.format(task.dueDate)} • Tap to reschedule',
-        scheduledTime: overdueTime,
+    if (overdue) {
+      await _schedule(
+        id: _taskId(t.id) + 1,
+        title: 'Past due: ${t.title}',
+        body:
+            'Was due at ${time.format(t.dueDate)} · tap to move it to tomorrow',
+        at: t.dueDate.add(const Duration(minutes: 15)),
         priority: Priority.max,
         type: 'overdue',
-        actions: ['reschedule'],
+        payload: 'task:${t.id}',
       );
     }
   }
 
-  /// Cancels all notifications for a specific task
-  Future<void> cancelTaskReminders(String taskId) async {
-    await _localNotifications.cancel(taskId.hashCode);
-    await _localNotifications.cancel(taskId.hashCode + 1);
-  }
+  /// Keep task ids clear of the fixed ids above.
+  int _taskId(String key) =>
+      100000 + (key.hashCode & 0x3fffffff) * 2 % 900000000;
 
-  /// Schedules daily morning briefing with busiest day detection
-  Future<void> scheduleMorningBriefing(List<TaskModel> allTasks) async {
-    final todayTasks = allTasks.where((t) => 
-      t.dueDate.year == DateTime.now().year && 
-      t.dueDate.month == DateTime.now().month && 
-      t.dueDate.day == DateTime.now().day).toList();
-    
-    if (todayTasks.isEmpty) return;
-
-    final overdueCount = allTasks.where((t) => !t.isCompleted && t.dueDate.isBefore(DateTime.now())).length;
-    
-    // Detect busiest day of the week
-    final Map<String, int> dailyCounts = {};
-    for (var task in allTasks) {
-      if (task.dueDate.isAfter(DateTime.now())) {
-        final day = DateFormat('EEEE').format(task.dueDate);
-        dailyCounts[day] = (dailyCounts[day] ?? 0) + 1;
-      }
-    }
-    
-    String busiestDay = "";
-    int maxCount = 0;
-    dailyCounts.forEach((day, count) {
-      if (count > maxCount) {
-        maxCount = count;
-        busiestDay = day;
-      }
-    });
-
+  DateTime _nextAt(int hour) {
     final now = DateTime.now();
-    var scheduledTime = DateTime(now.year, now.month, now.day, 8);
-    if (scheduledTime.isBefore(now)) {
-      scheduledTime = scheduledTime.add(const Duration(days: 1));
-    }
-
-    await _scheduleNotification(
-      id: 1001,
-      title: 'Morning briefing',
-      body: '${todayTasks.length} tasks today • $overdueCount overdue. ${busiestDay.isNotEmpty ? "Your busiest day is $busiestDay." : ""} Start strong.',
-      scheduledTime: scheduledTime,
-      priority: Priority.defaultPriority,
-      type: 'briefing',
-    );
+    var at = DateTime(now.year, now.month, now.day, hour);
+    if (!at.isAfter(now)) at = at.add(const Duration(days: 1));
+    return at;
   }
 
-  /// Schedules evening wrap-up (opt-in)
-  Future<void> scheduleEveningWrapUp(int completed, int total) async {
-    final prefs = await SharedPreferences.getInstance();
-    final isEnabled = prefs.getBool('evening_wrapup_enabled') ?? false;
-    if (!isEnabled) return;
+  // ───────────────────────── Immediate / focus ────────────────────────────
 
-    final now = DateTime.now();
-    var scheduledTime = DateTime(now.year, now.month, now.day, 20); // 8 PM
-    if (scheduledTime.isBefore(now)) {
-      scheduledTime = scheduledTime.add(const Duration(days: 1));
-    }
-
-    await _scheduleNotification(
-      id: 1002,
-      title: 'Evening wrap-up',
-      body:
-          'You completed $completed of $total tasks today. Roll over incomplete tasks?',
-      scheduledTime: scheduledTime,
-      priority: Priority.low,
-      type: 'wrapup',
-      actions: ['rollover'],
-    );
-  }
-
-  /// Schedules streak at risk reminder (3 hours before midnight)
-  Future<void> scheduleStreakAtRisk(
-      int currentStreak, bool tasksDoneToday) async {
-    if (tasksDoneToday || currentStreak == 0) return;
-
-    final now = DateTime.now();
-    final scheduledTime = DateTime(now.year, now.month, now.day, 21); // 9 PM
-
-    if (scheduledTime.isAfter(now)) {
-      await _scheduleNotification(
-        id: 2001,
-        title: 'Streak at risk',
-        body:
-            'Your $currentStreak-day streak ends in 3hrs. Complete one task to keep it alive.',
-        scheduledTime: scheduledTime,
-        priority: Priority.high,
-        type: 'streak_at_risk',
-      );
-    }
-  }
-
-  /// Schedules streak milestone celebration
-  Future<void> scheduleStreakMilestone(int milestone) async {
-    final milestones = [7, 14, 30, 60, 100];
-    if (!milestones.contains(milestone)) return;
-
-    await _scheduleNotification(
-      id: 2002,
-      title: 'Streak milestone',
-      body:
-          '$milestone-day streak. That\'s a habit. You\'ve completed tasks every day this month.',
-      scheduledTime: DateTime.now(), // Fire immediately on achievement
-      priority: Priority.low,
-      type: 'milestone',
-    );
-  }
-
-  /// Schedules weekly review (Sunday evening)
-  Future<void> scheduleWeeklyReview(int tasksCompleted) async {
-    final now = DateTime.now();
-    var scheduledTime = DateTime(now.year, now.month, now.day, 19); // 7 PM
-
-    // Adjust to next Sunday if not Sunday or already past 7 PM
-    int daysUntilSunday = (DateTime.sunday - now.weekday) % 7;
-    if (daysUntilSunday == 0 && now.hour >= 19) {
-      daysUntilSunday = 7;
-    }
-    scheduledTime = scheduledTime.add(Duration(days: daysUntilSunday));
-
-    await _scheduleNotification(
-      id: 3001,
-      title: 'Weekly review ready',
-      body:
-          'Your week in review is ready. You completed $tasksCompleted tasks. Best week yet.',
-      scheduledTime: scheduledTime,
-      priority: Priority.low,
-      type: 'weekly_review',
-    );
-  }
-
-  /// Helper to schedule with Anti-Spam, Quiet Hours, and Grouping
-  Future<void> _scheduleNotification({
-    required int id,
-    required String title,
-    required String body,
-    required DateTime scheduledTime,
-    required Priority priority,
-    required String type,
-    List<String>? actions,
-  }) async {
-    // 1. Apply Anti-Spam Rules
-    if (!await _shouldFire(type, priority)) return;
-
-    // 2. Respect Quiet Hours (10 PM - 8 AM)
-    final finalTime = _adjustForQuietHours(scheduledTime);
-
-    // 3. Android Details with Grouping
-    final androidDetails = AndroidNotificationDetails(
-      'todo_advanced',
-      'Advanced Reminders',
-      channelDescription: 'Smart notifications with anti-spam rules',
-      importance: _mapPriorityToImportance(priority),
-      priority: priority,
-      groupKey: 'com.kshitijcodecraft.tasktrackr.TASK_GROUP',
-      actions: actions?.map((a) {
-        if (a == 'reschedule') {
-          return const AndroidNotificationAction('reschedule', 'Reschedule',
-              showsUserInterface: true);
-        }
-        if (a == 'rollover') {
-          return const AndroidNotificationAction('rollover', 'Roll over',
-              showsUserInterface: true);
-        }
-        return const AndroidNotificationAction('unknown', 'Action');
-      }).toList(),
-    );
-
-    await _localNotifications.zonedSchedule(
-      id,
-      title,
-      body,
-      tz.TZDateTime.from(finalTime, tz.local),
-      NotificationDetails(
-          android: androidDetails,
-          iOS: const DarwinNotificationDetails(threadIdentifier: 'task_group')),
+  Future<void> scheduleFocusEnd(DateTime at) async {
+    if (!_ready) return;
+    await _local.cancel(_idFocus);
+    await _local.zonedSchedule(
+      _idFocus,
+      'Focus session complete',
+      'Nice work. Take five, then go again.',
+      tz.TZDateTime.from(at, tz.local),
+      _details(Priority.high),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
     );
-
-    // Increment daily count
-    await _incrementNotificationCount();
   }
 
-  DateTime _adjustForQuietHours(DateTime time) {
-    if (time.hour >= 22) {
-      // If after 10 PM, move to 8 AM next day
-      return DateTime(time.year, time.month, time.day + 1, 8);
-    } else if (time.hour < 8) {
-      // If before 8 AM, move to 8 AM same day
-      return DateTime(time.year, time.month, time.day, 8);
+  Future<void> cancelFocusEnd() async {
+    if (_ready) await _local.cancel(_idFocus);
+  }
+
+  Future<void> celebrateStreakMilestone(int streak) async {
+    if (!_ready || !_milestones.contains(streak)) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('notif.streakMilestone') ?? true)) return;
+    final key = 'milestone_shown_$streak';
+    if (prefs.getBool(key) ?? false) return;
+    await prefs.setBool(key, true);
+    await _local.show(
+      _idMilestone,
+      '$streak-day streak',
+      "That's a habit now. Keep the chain going.",
+      _details(Priority.low),
+    );
+  }
+
+  /// Mirrors the Firestore settings locally so background code can read them.
+  Future<void> cacheSettings(NotificationSettings s) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notif.streakMilestone', s.streakMilestone);
+    await prefs.setBool('evening_wrapup_enabled', s.eveningWrapUp);
+  }
+
+  // ───────────────────────── Plumbing ─────────────────────────────────────
+
+  /// Per-firing-day budget for non-critical notifications (max 3/day).
+  final Map<String, int> _budget = {};
+
+  Future<void> _schedule({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime at,
+    required Priority priority,
+    required String type,
+    String? payload,
+    bool quietHours = true,
+  }) async {
+    var fireAt = quietHours ? _adjustForQuietHours(at) : at;
+    if (!fireAt.isAfter(DateTime.now())) return;
+
+    if (type != 'overdue') {
+      final day = DateFormat('yyyy-MM-dd').format(fireAt);
+      final used = _budget[day] ?? 0;
+      if (used >= 3 || !await _engaged(priority)) return;
+      _budget[day] = used + 1;
     }
+
+    await _local.zonedSchedule(
+      id,
+      title,
+      body,
+      tz.TZDateTime.from(fireAt, tz.local),
+      _details(priority, actions: payload != null),
+      payload: payload,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+    );
+  }
+
+  NotificationDetails _details(Priority priority, {bool actions = false}) =>
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'todo_advanced',
+          'Reminders',
+          channelDescription: 'Task, streak and focus reminders',
+          importance: priority == Priority.max
+              ? Importance.max
+              : priority == Priority.high
+                  ? Importance.high
+                  : Importance.defaultImportance,
+          priority: priority,
+          groupKey: 'com.kshitijcodecraft.tasktrackr.TASK_GROUP',
+          actions: actions
+              ? const [
+                  AndroidNotificationAction('reschedule', 'Move to tomorrow',
+                      showsUserInterface: true),
+                ]
+              : null,
+        ),
+        iOS: DarwinNotificationDetails(
+          threadIdentifier: 'task_group',
+          categoryIdentifier: actions ? 'task_actions' : null,
+        ),
+      );
+
+  DateTime _adjustForQuietHours(DateTime time) {
+    if (time.hour >= 22)
+      return DateTime(time.year, time.month, time.day + 1, 8);
+    if (time.hour < 8) return DateTime(time.year, time.month, time.day, 8);
     return time;
   }
 
-  Future<bool> _shouldFire(String type, Priority priority) async {
-    // Critical (Overdue) alerts always fire
-    if (type == 'overdue') return true;
-
+  /// If the user hasn't tapped a notification in two weeks, ask once and
+  /// then only send high-priority ones.
+  Future<bool> _engaged(Priority priority) async {
     final prefs = await SharedPreferences.getInstance();
-
-    // Engagement check: If no tap in 2 weeks, ask once
-    final lastTapStr = prefs.getString('last_notif_tap');
-    if (lastTapStr != null) {
-      final lastTap = DateTime.parse(lastTapStr);
-      final daysSinceTap = DateTime.now().difference(lastTap).inDays;
-      
-      if (daysSinceTap > 14) {
-        final hasAsked = prefs.getBool('asked_engagement') ?? false;
-        if (!hasAsked) {
-          await _scheduleNotification(
-            id: 9999,
-            title: 'Still want these reminders?',
-            body: 'We noticed you haven\'t tapped a notification in a while.',
-            scheduledTime: DateTime.now().add(const Duration(hours: 1)),
-            priority: Priority.defaultPriority,
-            type: 'engagement_prompt',
-          );
-          await prefs.setBool('asked_engagement', true);
-        }
-        
-        // Reduce frequency logic
-        if (priority.value < Priority.high.value) return false;
-      }
+    final lastTap = prefs.getString('last_notif_tap');
+    if (lastTap == null) {
+      await prefs.setString('last_notif_tap', DateTime.now().toIso8601String());
+      return true;
     }
-
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final count = prefs.getInt('notif_count_$today') ?? 0;
-
-    // Never fire more than 3 per day
-    if (count >= 3) return false;
-
-    return true;
+    if (DateTime.now().difference(DateTime.parse(lastTap)).inDays <= 14) {
+      return true;
+    }
+    if (!(prefs.getBool('asked_engagement') ?? false)) {
+      await prefs.setBool('asked_engagement', true);
+      await _local.zonedSchedule(
+        _idEngagement,
+        'Still want these reminders?',
+        'Open TaskTrackr to keep them, or turn them down in Notifications.',
+        tz.TZDateTime.from(
+            DateTime.now().add(const Duration(hours: 1)), tz.local),
+        _details(Priority.defaultPriority),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    }
+    return priority.value >= Priority.high.value;
   }
 
-  Future<void> _incrementNotificationCount() async {
-    final prefs = await SharedPreferences.getInstance();
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final count = prefs.getInt('notif_count_$today') ?? 0;
-    await prefs.setInt('notif_count_$today', count + 1);
-  }
-
-  Importance _mapPriorityToImportance(Priority priority) {
-    if (priority == Priority.max) return Importance.max;
-    if (priority == Priority.high) return Importance.high;
-    return Importance.defaultImportance;
-  }
-
-  void _handleNotificationAction(NotificationResponse details) async {
-    log('Action tapped: ${details.actionId}');
-    
-    // Update engagement
+  Future<void> _handleResponse(NotificationResponse r) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('last_notif_tap', DateTime.now().toIso8601String());
+    await prefs.setBool('asked_engagement', false);
 
-    if (details.actionId == 'reschedule') {
-      if (details.payload != null) {
-        onReschedule?.call(details.payload!);
-      }
-    } else if (details.actionId == 'rollover') {
+    final payload = r.payload ?? '';
+    final action = r.actionId;
+    if (action == 'rollover' || (action == null && payload == 'rollover')) {
       onRollover?.call();
+    } else if (payload.startsWith('task:')) {
+      final id = payload.substring(5);
+      if (action == 'reschedule') {
+        onReschedule?.call(id);
+      } else {
+        onOpenTask?.call(id);
+      }
     }
   }
 
-  // Static method for background message handling
   static Future<void> handleBackgroundMessage(RemoteMessage message) async {
     log('Handling a background message: ${message.messageId}');
   }

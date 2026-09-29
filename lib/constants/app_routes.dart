@@ -4,9 +4,9 @@ import 'dart:developer';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show immutable, ChangeNotifier;
 import 'package:go_router/go_router.dart';
-import 'package:tasktrackr/data/backend/authenticator.dart';
 
 import '../presentation/screens/account_settings_screen.dart';
+import '../presentation/screens/calendar_screen.dart';
 import '../presentation/screens/home_screen.dart';
 import '../presentation/screens/insights_screen.dart';
 import '../presentation/screens/login_screen.dart';
@@ -36,8 +36,6 @@ class GoRouterRefreshStream extends ChangeNotifier {
 @immutable
 class AppRoutes {
   const AppRoutes._();
-
-  static const _authenticator = Authenticator();
 
   static final router = GoRouter(
     initialLocation: SplashScreen.routeName,
@@ -106,6 +104,11 @@ class AppRoutes {
         name: NotificationSettingsScreen.routeName,
         path: NotificationSettingsScreen.routeName,
         builder: (context, state) => const NotificationSettingsScreen(),
+      ),
+      GoRoute(
+        name: CalendarScreen.routeName,
+        path: CalendarScreen.routeName,
+        builder: (context, state) => const CalendarScreen(),
       ),
       GoRoute(
         name: SplashScreen.routeName,

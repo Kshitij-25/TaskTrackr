@@ -3,332 +3,300 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../data/models/task_model.dart';
-import '../../theme/app_colors.dart';
-import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../components/app_state_views.dart';
+import '../../theme/momentum_tokens.dart';
+import '../components/momentum_ui.dart';
+import '../providers/momentum_provider.dart';
 import '../providers/task_provider.dart';
 
+/// Real numbers only: completions (by completion date), XP, focus minutes
+/// and habit consistency over the last 7 days, plus project mix.
 class InsightsScreen extends ConsumerWidget {
   const InsightsScreen({super.key});
   static const routeName = '/insights';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final taskListAsync = ref.watch(taskListProvider);
+    final m = context.m;
+    final tasks =
+        ref.watch(taskListProvider).valueOrNull ?? const <TaskModel>[];
+    final momentum = ref.watch(momentumProvider);
+    final focus = ref.watch(focusProvider);
+    final habits = ref.watch(habitsProvider);
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final days = List.generate(7, (i) => today.subtract(Duration(days: 6 - i)));
+    DateTime doneOn(TaskModel t) =>
+        DateUtils.dateOnly(t.completedAt ?? t.dueDate);
+
+    final done = tasks.where((t) => t.isCompleted).toList();
+    final perDay = [
+      for (final d in days) done.where((t) => doneOn(t) == d).length,
+    ];
+    final weekDone = perDay.fold<int>(0, (a, b) => a + b);
+    final prevStart = days.first.subtract(const Duration(days: 7));
+    final prevDone = done
+        .where((t) =>
+            !doneOn(t).isBefore(prevStart) && doneOn(t).isBefore(days.first))
+        .length;
+    final focusWeek = [
+      for (final d in days) focus.minutesByDay[dayKey(d)] ?? 0,
+    ].fold<int>(0, (a, b) => a + b);
+    final weekXp = momentum.lastWeek.fold<int>(0, (a, b) => a + b);
+    final habitSlots = habits.length * 7;
+    final habitHits =
+        habits.fold<int>(0, (a, h) => a + h.week.where((v) => v).length);
+    final open = tasks.where((t) => !t.isCompleted).toList();
+    final overdue = open.where((t) => t.dueDate.isBefore(today)).length;
+    final onTime = done
+        .where(
+            (t) => t.completedAt != null && !t.completedAt!.isAfter(t.dueDate))
+        .length;
+    final withStamp = done.where((t) => t.completedAt != null).length;
+
+    final projects = <String, int>{};
+    for (final t in tasks) {
+      projects.update(t.category, (v) => v + 1, ifAbsent: () => 1);
+    }
+    final projectList = projects.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final best = perDay.indexOf(perDay.reduce((a, b) => a > b ? a : b));
+    final maxDay = perDay.reduce((a, b) => a > b ? a : b).clamp(1, 1 << 30);
+    final delta = weekDone - prevDone;
+
+    final tip = overdue > 0
+        ? '$overdue task${overdue == 1 ? ' is' : 's are'} overdue. Open Today → Review plan to roll them forward in one tap.'
+        : focusWeek < 50
+            ? 'Only ${focusWeek}m of focus this week. Two 25-minute sessions a day compounds fast.'
+            : habitSlots > 0 && habitHits / habitSlots < .5
+                ? 'Habits landed ${(habitHits / habitSlots * 100).round()}% of the time. Drop one and keep the rest perfect.'
+                : 'Your best day was ${DateFormat('EEEE').format(days[best])}. Put the hardest work there next week.';
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SafeArea(
-        child: taskListAsync.when(
-          data: (tasks) {
-            if (tasks.isEmpty) {
-              return const AppEmptyState(
-                title: 'No insights yet',
-                subtitle:
-                    'Complete some tasks to see your productivity trends and personalized tips.',
-                iconData: Icons.insights_outlined,
-              );
-            }
-
-            final completedTasks = tasks.where((t) => t.isCompleted).toList();
-            final completedCount = completedTasks.length;
-
-            // Calculate focus time (mock: 25 mins per completed task)
-            final focusTimeHours = (completedCount * 25) / 60;
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(AppSpacing.space6),
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(title: const Text('Insights')),
+      body: Stack(children: [
+        const Positioned.fill(child: AuroraBackground()),
+        ListView(
+          padding: EdgeInsets.fromLTRB(
+            MomentumTokens.gutter,
+            MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+            MomentumTokens.gutter,
+            40,
+          ),
+          children: [
+            Row(children: [
+              _Stat('$weekDone', 'DONE THIS WEEK', m.amber,
+                  sub: delta == 0
+                      ? 'same as last week'
+                      : '${delta > 0 ? '+' : ''}$delta vs last week'),
+              const SizedBox(width: 8),
+              _Stat(
+                  '${focusWeek ~/ 60}h ${focusWeek % 60}m', 'FOCUS', m.violet),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              _Stat('+$weekXp', 'XP THIS WEEK', m.cyan),
+              const SizedBox(width: 8),
+              _Stat(
+                withStamp == 0 ? '—' : '${(onTime / withStamp * 100).round()}%',
+                'ON TIME',
+                m.success,
+              ),
+            ]),
+            const SizedBox(height: MomentumTokens.sectionGap),
+            const SectionLabel('Completions · last 7 days'),
+            const SizedBox(height: 10),
+            GlassCard(
+              child: SizedBox(
+                height: 140,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < 7; i++) ...[
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text('${perDay[i]}',
+                                style: AppTypography.label.copyWith(
+                                    fontSize: 9.5,
+                                    color:
+                                        i == best ? m.amber : m.inkTertiary)),
+                            const SizedBox(height: 4),
+                            Flexible(
+                              child: FractionallySizedBox(
+                                heightFactor: (perDay[i] / maxDay)
+                                    .clamp(.05, 1)
+                                    .toDouble(),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(7),
+                                    gradient: i == best && perDay[i] > 0
+                                        ? LinearGradient(
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                            colors: [m.amber, m.violet])
+                                        : null,
+                                    color: i == best && perDay[i] > 0
+                                        ? null
+                                        : m.ink.withValues(alpha: .14),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(DateFormat('E').format(days[i])[0],
+                                style: AppTypography.label.copyWith(
+                                    fontSize: 9.5, color: m.inkTertiary)),
+                          ],
+                        ),
+                      ),
+                      if (i < 6) const SizedBox(width: 8),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            GlassCard(
+              tint: m.violet.withValues(alpha: m.isDark ? .12 : .06),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Insights',
-                    style: AppTypography.heading1.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.onSurface,
+                  SectionLabel('Momentum AI · tip', color: m.violet),
+                  const SizedBox(height: 8),
+                  Text(tip,
+                      style: AppTypography.bodyStrong
+                          .copyWith(color: m.ink, fontSize: 14, height: 1.45)),
+                ],
+              ),
+            ),
+            const SizedBox(height: MomentumTokens.sectionGap),
+            SectionLabel(
+                'Habits · ${habitSlots == 0 ? 0 : (habitHits / habitSlots * 100).round()}% this week'),
+            const SizedBox(height: 10),
+            GlassCard(
+              child: Column(children: [
+                if (habits.isEmpty)
+                  Text('No habits yet.',
+                      style:
+                          AppTypography.body.copyWith(color: m.inkSecondary)),
+                for (final h in habits)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text(h.name,
+                            style: AppTypography.caption.copyWith(
+                                color: m.ink, fontWeight: FontWeight.w600)),
+                      ),
+                      for (final v in h.week)
+                        Container(
+                          width: 14,
+                          height: 14,
+                          margin: const EdgeInsets.only(left: 3),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(4),
+                            color: v
+                                ? m.violet.withValues(alpha: .8)
+                                : m.ink.withValues(alpha: .08),
+                          ),
+                        ),
+                    ]),
+                  ),
+              ]),
+            ),
+            const SizedBox(height: MomentumTokens.sectionGap),
+            const SectionLabel('Project mix'),
+            const SizedBox(height: 10),
+            GlassCard(
+              child: Column(children: [
+                if (projectList.isEmpty)
+                  Text('Add tasks to see where your time goes.',
+                      style:
+                          AppTypography.body.copyWith(color: m.inkSecondary)),
+                for (final e in projectList)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Expanded(
+                            child: Text(e.key,
+                                style: AppTypography.caption.copyWith(
+                                    color: m.ink, fontWeight: FontWeight.w600)),
+                          ),
+                          Text(
+                              '${e.value} · ${(e.value / tasks.length * 100).round()}%',
+                              style: AppTypography.label.copyWith(
+                                  fontSize: 10, color: m.inkTertiary)),
+                        ]),
+                        const SizedBox(height: 6),
+                        Container(
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: m.ink.withValues(alpha: .08),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: e.value / tasks.length,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: m.projectColor(e.key),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.space6),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildStatCard(
-                          context,
-                          'Completed',
-                          completedCount.toString(),
-                          Icons.check_circle_outline,
-                          AppColors.success,
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.space4),
-                      Expanded(
-                        child: _buildStatCard(
-                          context,
-                          'Focus Time',
-                          '${focusTimeHours.toStringAsFixed(1)}h',
-                          Icons.timer_outlined,
-                          AppColors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.space8),
-                  _buildSectionHeader(context, 'WEEKLY PRODUCTIVITY'),
-                  const SizedBox(height: AppSpacing.space4),
-                  _buildActivityChart(context, tasks),
-                  const SizedBox(height: AppSpacing.space8),
-                  _buildAITip(context, tasks),
-                  const SizedBox(height: AppSpacing.space8),
-                  _buildSectionHeader(context, 'CATEGORY BREAKDOWN'),
-                  const SizedBox(height: AppSpacing.space4),
-                  _buildCategoryBreakdown(context, tasks),
-                  const SizedBox(height: AppSpacing.space12),
-                ],
-              ),
-            );
-          },
-          loading: () =>
-              const Center(child: CircularProgressIndicator.adaptive()),
-          error: (err, stack) => AppErrorState(
-            error: err.toString(),
-            onRetry: () => ref.invalidate(taskListProvider),
-          ),
+              ]),
+            ),
+          ],
         ),
-      ),
+      ]),
     );
   }
+}
 
-  Widget _buildStatCard(BuildContext context, String label, String value,
-      IconData icon, Color color) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.space4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: AppRadius.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: AppSpacing.space2),
-          Text(
-            value,
-            style: AppTypography.heading2.copyWith(
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface),
-          ),
-          Text(
-            label,
-            style: AppTypography.label.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-          ),
-        ],
-      ),
-    );
-  }
+class _Stat extends StatelessWidget {
+  const _Stat(this.value, this.label, this.color, {this.sub});
+  final String value;
+  final String label;
+  final Color color;
+  final String? sub;
 
-  Widget _buildActivityChart(BuildContext context, List<TaskModel> tasks) {
-    final theme = Theme.of(context);
-    final now = DateTime.now();
-    final weekDays =
-        List.generate(7, (index) => now.subtract(Duration(days: 6 - index)));
-
-    return Container(
-      height: 200,
-      padding: const EdgeInsets.all(AppSpacing.space6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: AppRadius.borderRadiusLg,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: weekDays.map((day) {
-          final completedOnDay = tasks
-              .where(
-                  (t) => t.isCompleted && DateUtils.isSameDay(t.dueDate, day))
-              .length;
-
-          final double heightFactor = (completedOnDay / 10).clamp(0.1, 1.0);
-
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Container(
-                width: 12,
-                height: 120 * heightFactor,
-                decoration: BoxDecoration(
-                  color:
-                      theme.colorScheme.primary.withValues(alpha: heightFactor),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.space2),
-              Text(
-                DateFormat('E').format(day)[0],
-                style: AppTypography.label.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-              ),
+  @override
+  Widget build(BuildContext context) {
+    final m = context.m;
+    return Expanded(
+      child: GlassCard(
+        radius: MomentumTokens.radiusRow,
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(value,
+                style:
+                    AppTypography.display.copyWith(fontSize: 26, color: color)),
+            const SizedBox(height: 4),
+            Text(label,
+                style: AppTypography.label
+                    .copyWith(fontSize: 9, color: m.inkTertiary)),
+            if (sub != null) ...[
+              const SizedBox(height: 4),
+              Text(sub!,
+                  style: AppTypography.caption
+                      .copyWith(fontSize: 11, color: m.inkSecondary)),
             ],
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  Widget _buildCategoryBreakdown(BuildContext context, List<TaskModel> tasks) {
-    final theme = Theme.of(context);
-    final categories = ['Work', 'Personal', 'Health', 'Finance'];
-    final total = tasks.isEmpty ? 1 : tasks.length;
-
-    return Column(
-      children: categories.map((cat) {
-        final count = tasks.where((t) => t.category == cat).length;
-        final progress = count / total;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: AppSpacing.space3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(cat,
-                      style: AppTypography.body.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.onSurface)),
-                  Text('${(progress * 100).toInt()}%',
-                      style: AppTypography.label.copyWith(
-                          color: theme.colorScheme.onSurface
-                              .withValues(alpha: 0.5))),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.space2),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  backgroundColor:
-                      theme.colorScheme.onSurface.withValues(alpha: 0.05),
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
-                  minHeight: 8,
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildAITip(BuildContext context, List<TaskModel> tasks) {
-    final tip = _getPersonalizedTip(tasks);
-
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.space6),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppColors.primary, AppColors.primary.withValues(alpha: 0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          ],
         ),
-        borderRadius: AppRadius.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
-              const SizedBox(width: AppSpacing.space2),
-              Text(
-                'PERSONALIZED TIP',
-                style: AppTypography.label.copyWith(
-                    color: Colors.white.withValues(alpha: 0.8),
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.1),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.space3),
-          Text(
-            tip,
-            style: AppTypography.body.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w500,
-                height: 1.4,
-                fontSize: 15),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _getPersonalizedTip(List<TaskModel> tasks) {
-    if (tasks.isEmpty)
-      return 'Welcome! Start by adding your first task to see personalized insights.';
-
-    final activeTasks = tasks.where((t) => !t.isCompleted).toList();
-    final completedTasks = tasks.where((t) => t.isCompleted).toList();
-    final overdueCount =
-        activeTasks.where((t) => t.dueDate.isBefore(DateTime.now())).length;
-
-    // 1. Overdue Priority
-    if (overdueCount > 0) {
-      return "You have $overdueCount overdue tasks. We recommend the '2-minute rule': if it takes less than 2 minutes, do it now!";
-    }
-
-    // 2. High Completion Rate
-    if (completedTasks.length > activeTasks.length * 2 &&
-        activeTasks.isNotEmpty) {
-      return "You're on fire! You've completed ${completedTasks.length} tasks recently. Consider taking a short break to recharge.";
-    }
-
-    // 3. Category Focus
-    final workTasks = activeTasks.where((t) => t.category == 'Work').length;
-    if (workTasks > activeTasks.length * 0.7 && activeTasks.length > 3) {
-      return "You're heavily focused on 'Work' right now. Don't forget to balance with 'Personal' or 'Health' tasks today!";
-    }
-
-    // 4. Low Activity
-    if (activeTasks.length > 8) {
-      return 'Your list is getting long (${activeTasks.length} items). Try the Eisenhower Matrix: distinguish between urgent and important tasks.';
-    }
-
-    // 5. Clean Slate
-    if (activeTasks.isEmpty) {
-      return 'All caught up! Why not take this time to plan your goals for the coming week?';
-    }
-
-    return "Consistency is key. You've completed ${completedTasks.length} tasks so far. Keep building that momentum!";
-  }
-
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    final theme = Theme.of(context);
-    return Text(
-      title,
-      style: AppTypography.label.copyWith(
-        fontWeight: FontWeight.bold,
-        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-        letterSpacing: 1.2,
       ),
     );
   }

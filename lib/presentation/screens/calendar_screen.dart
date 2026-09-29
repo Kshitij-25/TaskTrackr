@@ -3,253 +3,231 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../data/models/task_model.dart';
-import '../../theme/app_spacing.dart';
+import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
-import '../components/app_state_views.dart';
-import '../components/task_card.dart';
+import '../../theme/momentum_tokens.dart';
+import '../components/add_task_sheet.dart';
+import '../components/momentum_ui.dart';
+import '../components/task_row.dart';
 import '../providers/task_provider.dart';
 
 class CalendarScreen extends ConsumerStatefulWidget {
   const CalendarScreen({super.key});
+  static const routeName = '/calendar';
 
   @override
   ConsumerState<CalendarScreen> createState() => _CalendarScreenState();
 }
 
 class _CalendarScreenState extends ConsumerState<CalendarScreen> {
-  DateTime _focusedMonth = DateTime.now();
-  DateTime _selectedDate = DateTime.now();
+  DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
+  DateTime _selected = DateUtils.dateOnly(DateTime.now());
 
-  void _prevMonth() {
-    setState(() {
-      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
-    });
-  }
-
-  void _nextMonth() {
-    setState(() {
-      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
-    });
-  }
+  void _shiftMonth(int by) =>
+      setState(() => _month = DateTime(_month.year, _month.month + by));
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final taskListAsync = ref.watch(taskListProvider);
+    final m = context.m;
+    final tasks =
+        ref.watch(taskListProvider).valueOrNull ?? const <TaskModel>[];
+    final byDay = <DateTime, List<TaskModel>>{};
+    for (final t in tasks) {
+      byDay.putIfAbsent(DateUtils.dateOnly(t.dueDate), () => []).add(t);
+    }
+    final dayTasks = [...?byDay[_selected]]
+      ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+    final load = dayTasks
+        .where((t) => !t.isCompleted)
+        .fold<int>(0, (a, t) => a + (t.estimateMinutes ?? 30));
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SafeArea(
-        child: taskListAsync.when(
-          data: (tasks) {
-            final tasksForSelectedDate = tasks
-                .where((t) => DateUtils.isSameDay(t.dueDate, _selectedDate))
-                .toList();
-
-            return Column(
-              children: [
-                _buildHeader(context),
-                _buildCalendarGrid(context, tasks),
-                const SizedBox(height: AppSpacing.space4),
-                _buildDayHeader(context, tasksForSelectedDate.length),
-                Expanded(
-                  child: tasksForSelectedDate.isEmpty
-                      ? const AppEmptyState(
-                          title: 'Free day!',
-                          subtitle: 'No tasks scheduled for this date.',
-                          iconData: Icons.event_available,
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(AppSpacing.space4),
-                          itemCount: tasksForSelectedDate.length,
-                          itemBuilder: (context, index) {
-                            final task = tasksForSelectedDate[index];
-                            return TaskCard(
-                              title: task.title,
-                              date: DateFormat('h:mm a').format(task.dueDate),
-                              priority: task.priority,
-                              category: task.category,
-                              isCompleted: task.isCompleted,
-                              isPending: task.isPending,
-                              onToggle: (val) {
-                                ref
-                                    .read(taskActionsProvider)
-                                    .toggleTaskCompletion(
-                                        task.id, val ?? false);
-                              },
-                              onDelete: () {
-                                ref
-                                    .read(taskActionsProvider)
-                                    .deleteTask(task.id);
-                              },
-                            );
-                          },
-                        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(title: const Text('Calendar')),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: m.isDark ? Colors.white : m.ink,
+        foregroundColor: m.isDark ? const Color(0xFF0B0B12) : Colors.white,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(MomentumTokens.radiusRow)),
+        onPressed: () => showAddTaskSheet(context, day: _selected),
+        child: const Icon(Icons.add_rounded),
+      ),
+      body: Stack(children: [
+        const Positioned.fill(child: AuroraBackground()),
+        ListView(
+          padding: EdgeInsets.fromLTRB(
+            MomentumTokens.gutter,
+            MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+            MomentumTokens.gutter,
+            120,
+          ),
+          children: [
+            GlassCard(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+              child: Column(children: [
+                Row(children: [
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(DateFormat('MMMM yyyy').format(_month),
+                        style: AppTypography.heading2.copyWith(color: m.ink)),
+                  ),
+                  IconButton(
+                    onPressed: () => _shiftMonth(-1),
+                    icon:
+                        Icon(Icons.chevron_left_rounded, color: m.inkSecondary),
+                  ),
+                  IconButton(
+                    onPressed: () => _shiftMonth(1),
+                    icon: Icon(Icons.chevron_right_rounded,
+                        color: m.inkSecondary),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                Row(children: [
+                  for (final d in ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
+                    Expanded(
+                      child: Center(
+                        child: Text(d,
+                            style: AppTypography.label
+                                .copyWith(color: m.inkTertiary)),
+                      ),
+                    ),
+                ]),
+                const SizedBox(height: 6),
+                _MonthGrid(
+                  month: _month,
+                  selected: _selected,
+                  byDay: byDay,
+                  onPick: (d) => setState(() => _selected = d),
                 ),
-              ],
-            );
-          },
-          loading: () =>
-              const Center(child: CircularProgressIndicator.adaptive()),
-          error: (err, stack) => AppErrorState(
-            error: err.toString(),
-            onRetry: () => ref.invalidate(taskListProvider),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeader(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.space4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            DateFormat.yMMMM().format(_focusedMonth),
-            style: AppTypography.heading1.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface,
+              ]),
             ),
-          ),
-          Row(
-            children: [
-              IconButton(
-                onPressed: _prevMonth,
-                icon: Icon(Icons.chevron_left,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            const SizedBox(height: MomentumTokens.sectionGap),
+            SectionLabel(
+              DateFormat('EEEE d MMMM').format(_selected),
+              trailing: Text(
+                dayTasks.isEmpty
+                    ? 'FREE'
+                    : '${dayTasks.length} TASKS · ${load ~/ 60}H ${load % 60}M',
+                style: AppTypography.label.copyWith(
+                  fontSize: 10,
+                  color: load > 12 * 60 ? m.danger : m.inkSecondary,
+                ),
               ),
-              IconButton(
-                onPressed: _nextMonth,
-                icon: Icon(Icons.chevron_right,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            ),
+            const SizedBox(height: 10),
+            if (dayTasks.isEmpty)
+              MomentumEmptyState(
+                title: 'A free day',
+                message: 'Nothing is due. Protect it, or plan something.',
+                actionLabel: 'Add to this day',
+                onAction: () => showAddTaskSheet(context, day: _selected),
+              )
+            else
+              GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(children: [
+                  for (final t in dayTasks) TaskRow(task: t, showDue: true),
+                ]),
               ),
-            ],
-          ),
-        ],
-      ),
+          ],
+        ),
+      ]),
     );
   }
+}
 
-  Widget _buildCalendarGrid(BuildContext context, List<TaskModel> tasks) {
-    final theme = Theme.of(context);
-    final int daysInMonth =
-        DateUtils.getDaysInMonth(_focusedMonth.year, _focusedMonth.month);
-    final DateTime firstDayOfMonth =
-        DateTime(_focusedMonth.year, _focusedMonth.month);
-    final int startWeekday = firstDayOfMonth.weekday;
-    final int offset = startWeekday - 1;
+class _MonthGrid extends StatelessWidget {
+  const _MonthGrid({
+    required this.month,
+    required this.selected,
+    required this.byDay,
+    required this.onPick,
+  });
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space4),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: ['M', 'T', 'W', 'T', 'F', 'S', 'S']
-                .map((day) => Text(day,
-                    style: AppTypography.label.copyWith(
-                        color: theme.colorScheme.onSurface
-                            .withValues(alpha: 0.4))))
-                .toList(),
-          ),
-          const SizedBox(height: AppSpacing.space2),
-          ...List.generate(6, (weekIndex) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: List.generate(7, (dayIndex) {
-                  final int dayNumber = (weekIndex * 7 + dayIndex) - offset + 1;
+  final DateTime month;
+  final DateTime selected;
+  final Map<DateTime, List<TaskModel>> byDay;
+  final ValueChanged<DateTime> onPick;
 
-                  if (dayNumber < 1 || dayNumber > daysInMonth) {
-                    return const SizedBox(width: 32, height: 32);
-                  }
+  @override
+  Widget build(BuildContext context) {
+    final m = context.m;
+    final days = DateUtils.getDaysInMonth(month.year, month.month);
+    final offset = DateTime(month.year, month.month).weekday - 1;
+    final weeks = ((offset + days) / 7).ceil();
+    final today = DateUtils.dateOnly(DateTime.now());
 
-                  final DateTime date = DateTime(
-                      _focusedMonth.year, _focusedMonth.month, dayNumber);
-                  final bool isSelected =
-                      DateUtils.isSameDay(date, _selectedDate);
-                  final bool isToday =
-                      DateUtils.isSameDay(date, DateTime.now());
-
-                  final hasTasks =
-                      tasks.any((t) => DateUtils.isSameDay(t.dueDate, date));
-
-                  return InkWell(
-                    onTap: () => setState(() => _selectedDate = date),
-                    borderRadius: BorderRadius.circular(16),
+    return Column(children: [
+      for (var w = 0; w < weeks; w++)
+        Row(children: [
+          for (var d = 0; d < 7; d++)
+            Expanded(
+              child: Builder(builder: (_) {
+                final n = w * 7 + d - offset + 1;
+                if (n < 1 || n > days) return const SizedBox(height: 46);
+                final date = DateTime(month.year, month.month, n);
+                final isSel = date == selected;
+                final isToday = date == today;
+                final list = byDay[date] ?? const [];
+                final open = list.where((t) => !t.isCompleted).length;
+                final done = list.length - open;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onPick(date),
+                  child: SizedBox(
+                    height: 46,
                     child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Container(
+                        AnimatedContainer(
+                          duration: AppMotion.of(context, AppMotion.standard),
                           width: 32,
                           height: 32,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: isSelected
-                                ? theme.colorScheme.primary
-                                : Colors.transparent,
                             shape: BoxShape.circle,
-                            border: isToday && !isSelected
-                                ? Border.all(color: theme.colorScheme.primary)
+                            gradient: isSel
+                                ? LinearGradient(colors: [m.amber, m.violet])
+                                : null,
+                            border: isToday && !isSel
+                                ? Border.all(color: m.violet)
                                 : null,
                           ),
-                          child: Text(
-                            dayNumber.toString(),
-                            style: AppTypography.body.copyWith(
-                              color: isSelected
-                                  ? theme.colorScheme.onPrimary
-                                  : theme.colorScheme.onSurface,
-                              fontWeight: isSelected || isToday
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
-                          ),
+                          child: Text('$n',
+                              style: AppTypography.caption.copyWith(
+                                fontWeight: isSel || isToday
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: isSel ? const Color(0xFF0B0B12) : m.ink,
+                              )),
                         ),
-                        if (hasTasks && !isSelected)
-                          Container(
-                            margin: const EdgeInsets.only(top: 2),
-                            width: 4,
-                            height: 4,
-                            decoration: BoxDecoration(
-                                color: theme.colorScheme.error,
-                                shape: BoxShape.circle),
-                          ),
+                        const SizedBox(height: 3),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            for (var i = 0; i < open.clamp(0, 3); i++)
+                              _dot(m.violet),
+                            for (var i = 0;
+                                i < done.clamp(0, 3 - open.clamp(0, 3));
+                                i++)
+                              _dot(m.ink.withValues(alpha: .25)),
+                          ],
+                        ),
                       ],
                     ),
-                  );
-                }),
-              ),
-            );
-          }),
-        ],
-      ),
-    );
+                  ),
+                );
+              }),
+            ),
+        ]),
+    ]);
   }
 
-  Widget _buildDayHeader(BuildContext context, int count) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            DateFormat('EEE MMM d').format(_selectedDate),
-            style: AppTypography.label.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          Text(
-            '$count tasks',
-            style: AppTypography.label.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _dot(Color c) => Container(
+        width: 4,
+        height: 4,
+        margin: const EdgeInsets.symmetric(horizontal: 1),
+        decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+      );
 }

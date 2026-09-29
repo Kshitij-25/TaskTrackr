@@ -12,7 +12,8 @@ final themeProvider = StateNotifierProvider<ThemeNotifier, ThemeMode>((ref) {
 });
 
 class ThemeNotifier extends StateNotifier<ThemeMode> {
-  ThemeNotifier(this._prefs) : super(ThemeMode.system) {
+  // AMOLED is the primary Momentum theme; light is opt-in.
+  ThemeNotifier(this._prefs) : super(ThemeMode.dark) {
     _loadTheme();
   }
 

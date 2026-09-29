@@ -40,7 +40,8 @@ class Authenticator {
     try {
       // Create an instance of GoogleSignIn with the specified scopes
       final GoogleSignIn googleSignIn = GoogleSignIn(
-        serverClientId: '141321526342-v3pp5gdojfb9f2meeclha0lj0jv7qh16.apps.googleusercontent.com',
+        serverClientId:
+            '141321526342-v3pp5gdojfb9f2meeclha0lj0jv7qh16.apps.googleusercontent.com',
         scopes: ['email'],
       );
 
@@ -65,9 +66,10 @@ class Authenticator {
         idToken: googleAuth.idToken,
       );
 
-      final userCredential = await FirebaseAuth.instance.signInWithCredential(oAuthCredential);
+      final userCredential =
+          await FirebaseAuth.instance.signInWithCredential(oAuthCredential);
       final user = userCredential.user;
-      
+
       if (user != null) {
         log('Google Login Success: ${user.uid}');
         // Wait for Firestore to store user info before proceeding
@@ -96,7 +98,8 @@ class Authenticator {
 
   Future<void> _storeUserInFirestore(User user) async {
     try {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final userDoc =
+          FirebaseFirestore.instance.collection('users').doc(user.uid);
       final userSnapshot = await userDoc.get();
 
       if (!userSnapshot.exists) {
@@ -117,7 +120,7 @@ class Authenticator {
     try {
       // Update FirebaseAuth
       await currentUser?.updateDisplayName(newName);
-      
+
       // Update Firestore
       if (userId != null) {
         await FirebaseFirestore.instance
@@ -140,7 +143,7 @@ class Authenticator {
           .ref()
           .child('user_profiles')
           .child('$userId.jpg');
-      
+
       await storageRef.putFile(file);
       final downloadUrl = await storageRef.getDownloadURL();
 
@@ -159,6 +162,7 @@ class Authenticator {
       rethrow;
     }
   }
+
   Future<void> updateNotificationSettings(Map<String, dynamic> settings) async {
     try {
       if (userId != null) {

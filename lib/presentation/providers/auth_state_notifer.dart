@@ -3,7 +3,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../data/backend/authenticator.dart';
 import '../../data/models/login_state.dart';
 
-final authStateNotifierProvider = StateNotifierProvider<AuthStateNotifier, LoginState>(
+final authStateNotifierProvider =
+    StateNotifierProvider<AuthStateNotifier, LoginState>(
   (ref) => AuthStateNotifier(),
 );
 
@@ -32,10 +33,9 @@ class AuthStateNotifier extends StateNotifier<LoginState> {
   Future<void> logOut() async {
     state = LoginState.loading;
     await _authenticator.logOut();
-    state = LoginState.success;
+    state = LoginState.idle;
   }
 }
-
 
 // class AuthStateNotifier extends StateNotifier<AuthState> {
 //   final _authenticator = const Authenticator();
