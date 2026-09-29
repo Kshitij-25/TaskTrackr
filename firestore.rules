@@ -1,0 +1,60 @@
+rules_version = '2';
+
+// TaskTrackr — every document belongs to exactly one signed-in user.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ── Profile: users/{uid} ────────────────────────────────────────────
+    // Written on first Google sign-in, then name/photo/notification edits.
+    match /users/{uid} {
+      // Delete is the in-app "Delete account" flow (a Play requirement).
+      allow read, create, update, delete: if isOwner(uid);
+
+      // XP, streak, habits and focus minutes: users/{uid}/momentum/state
+      match /momentum/{doc} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // ── Tasks: tasks/{taskId}, owned via the userId field ───────────────
+    match /tasks/{taskId} {
+      function validTask(data) {
+        return data.title is string
+          && data.title.size() > 0
+          && data.title.size() <= 500
+          && data.dueDate is timestamp
+          && data.priority in ['High', 'Medium', 'Low']
+          && data.category is string
+          && data.isCompleted is bool;
+      }
+
+      // Queries must filter on userId == auth.uid (the app always does).
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && validTask(request.resource.data);
+
+      // Owner only, and a task can never be handed to another user.
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && validTask(request.resource.data);
+
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

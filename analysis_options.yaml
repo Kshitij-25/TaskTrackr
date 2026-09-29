@@ -1,1 +1,85 @@
-include: package:flutter_lints/flutter.yaml
+formatter: 
+  trailing_commas: preserve
+  
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/*.mocks.dart"
+    - "build/**"
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+  errors:
+    missing_required_param: error
+    missing_return: error
+    invalid_annotation_target: ignore
+
+linter:
+  rules:
+    # Error rules
+    cancel_subscriptions: true
+    close_sinks: true
+    literal_only_boolean_expressions: true
+    no_adjacent_strings_in_list: true
+    throw_in_finally: true
+    unnecessary_statements: true
+
+    # Style & Consistency rules
+    always_use_package_imports: false # Better to use relative imports within the lib folder
+    avoid_bool_literals_in_conditional_expressions: true
+    avoid_catching_errors: true
+    avoid_classes_with_only_static_members: false # Disabled because it breaks RouteNames, AppColors, etc.
+    avoid_double_and_int_checks: true
+    avoid_field_initializers_in_const_classes: true
+    avoid_implementing_value_types: true
+    avoid_js_rounded_ints: true
+    avoid_multiple_declarations_per_line: true
+    avoid_positional_boolean_parameters: false
+    avoid_private_typedef_functions: true
+    avoid_redundant_argument_values: true
+    avoid_returning_this: true
+    avoid_setters_without_getters: true
+    avoid_slow_async_io: true
+    avoid_type_to_string: true
+    avoid_unnecessary_containers: true
+    avoid_unused_constructor_parameters: true
+    avoid_void_async: true
+    directives_ordering: true
+    eol_at_end_of_file: true
+    missing_whitespace_between_adjacent_strings: true
+    no_runtimeType_toString: true
+    noop_primitive_operations: true
+    only_throw_errors: true
+    parameter_assignments: false # Too restrictive for standard algorithms
+    prefer_asserts_in_initializer_lists: true
+    prefer_const_constructors: true
+    prefer_const_constructors_in_immutables: true
+    prefer_constructors_over_static_methods: false # Disabled to allow static generation methods
+    prefer_final_in_for_each: true
+    prefer_final_locals: false # False prevents warning on every standard `var`
+    prefer_if_elements_to_conditional_expressions: true
+    prefer_int_literals: true
+    prefer_single_quotes: true
+    sort_constructors_first: true
+    sort_unnamed_constructors_first: true
+    tighten_type_of_initializing_formals: true
+    type_annotate_public_apis: true
+    unawaited_futures: true
+    unnecessary_await_in_return: true
+    unnecessary_lambdas: true
+    unnecessary_null_aware_operator_on_extension_on_nullable: true
+    unnecessary_parenthesis: true
+    unnecessary_raw_strings: true
+    use_colored_box: true
+    use_decorated_box: true
+    use_enums: true
+    use_is_even_rather_than_modulo: true
+    use_named_constants: true
+    use_raw_strings: true
+    use_string_buffers: true
+    use_super_parameters: true
+    use_test_throws_matchers: true
