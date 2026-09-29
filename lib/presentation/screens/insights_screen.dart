@@ -18,8 +18,7 @@ class InsightsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final m = context.m;
-    final tasks =
-        ref.watch(taskListProvider).valueOrNull ?? const <TaskModel>[];
+    final tasks = ref.watch(taskListProvider).value ?? const <TaskModel>[];
     final momentum = ref.watch(momentumProvider);
     final focus = ref.watch(focusProvider);
     final habits = ref.watch(habitsProvider);

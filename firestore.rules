@@ -15,8 +15,8 @@ service cloud.firestore {
     // ── Profile: users/{uid} ────────────────────────────────────────────
     // Written on first Google sign-in, then name/photo/notification edits.
     match /users/{uid} {
-      allow read, create, update: if isOwner(uid);
-      allow delete: if false;
+      // Delete is the in-app "Delete account" flow (a Play requirement).
+      allow read, create, update, delete: if isOwner(uid);
 
       // XP, streak, habits and focus minutes: users/{uid}/momentum/state
       match /momentum/{doc} {

@@ -10,6 +10,6 @@ final authUserProvider = StreamProvider<User?>(
 /// Current uid, or null while signed out.
 final currentUidProvider = Provider<String?>(
   (ref) =>
-      ref.watch(authUserProvider).valueOrNull?.uid ??
+      ref.watch(authUserProvider).value?.uid ??
       FirebaseAuth.instance.currentUser?.uid,
 );

@@ -82,7 +82,7 @@ class NotificationService {
     );
 
     await _local.initialize(
-      InitializationSettings(
+      settings: InitializationSettings(
         android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
         iOS: DarwinInitializationSettings(
           notificationCategories: [iosCategory],
@@ -90,6 +90,7 @@ class NotificationService {
       ),
       onDidReceiveNotificationResponse: _handleResponse,
     );
+    await _resolveAndroidScheduleMode();
     _ready = true;
     if (!_readyCompleter.isCompleted) _readyCompleter.complete();
 
@@ -102,6 +103,39 @@ class NotificationService {
       log('FCM token unavailable: $e');
     }
   }
+
+  /// Exact alarms need SCHEDULE_EXACT_ALARM, which Android 14+ denies by
+  /// default and the user grants in system settings. Scheduling an exact
+  /// alarm without it throws, so fall back to inexact (may fire a few
+  /// minutes late) until the user allows it.
+  AndroidScheduleMode _androidMode = AndroidScheduleMode.inexactAllowWhileIdle;
+
+  Future<void> _resolveAndroidScheduleMode() async {
+    final android = _local.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) return;
+    // Android 13+: the runtime notification permission.
+    await android.requestNotificationsPermission();
+    final exact = await android.canScheduleExactNotifications() ?? false;
+    _androidMode = exact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  }
+
+  /// Opens the system "Alarms & reminders" screen so reminders fire on the
+  /// minute. Android only; returns whether exact alarms are now allowed.
+  Future<bool> requestExactAlarms() async {
+    final android = _local.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) return true;
+    await android.requestExactAlarmsPermission();
+    await _resolveAndroidScheduleMode();
+    _lastSignature = null; // force a re-plan with the new mode
+    return _androidMode == AndroidScheduleMode.exactAllowWhileIdle;
+  }
+
+  bool get exactAlarmsAllowed =>
+      _androidMode == AndroidScheduleMode.exactAllowWhileIdle;
 
   tz.Location _resolveLocation(String abbreviation) {
     final offset = DateTime.now().timeZoneOffset;
@@ -120,10 +154,10 @@ class NotificationService {
 
   Future<void> _showRemote(RemoteMessage message) async {
     await _local.show(
-      message.notification.hashCode,
-      message.notification?.title,
-      message.notification?.body,
-      const NotificationDetails(
+      id: message.notification.hashCode,
+      title: message.notification?.title,
+      body: message.notification?.body,
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'todo_reminders',
           'Todo Reminders',
@@ -160,7 +194,7 @@ class NotificationService {
 
     final pending = await _local.pendingNotificationRequests();
     for (final p in pending) {
-      if (p.id != _idFocus) await _local.cancel(p.id);
+      if (p.id != _idFocus) await _local.cancel(id: p.id);
     }
     _budget.clear();
 
@@ -323,21 +357,19 @@ class NotificationService {
 
   Future<void> scheduleFocusEnd(DateTime at) async {
     if (!_ready) return;
-    await _local.cancel(_idFocus);
+    await _local.cancel(id: _idFocus);
     await _local.zonedSchedule(
-      _idFocus,
-      'Focus session complete',
-      'Nice work. Take five, then go again.',
-      tz.TZDateTime.from(at, tz.local),
-      _details(Priority.high),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+      id: _idFocus,
+      title: 'Focus session complete',
+      body: 'Nice work. Take five, then go again.',
+      scheduledDate: tz.TZDateTime.from(at, tz.local),
+      notificationDetails: _details(Priority.high),
+      androidScheduleMode: _androidMode,
     );
   }
 
   Future<void> cancelFocusEnd() async {
-    if (_ready) await _local.cancel(_idFocus);
+    if (_ready) await _local.cancel(id: _idFocus);
   }
 
   Future<void> celebrateStreakMilestone(int streak) async {
@@ -348,10 +380,10 @@ class NotificationService {
     if (prefs.getBool(key) ?? false) return;
     await prefs.setBool(key, true);
     await _local.show(
-      _idMilestone,
-      '$streak-day streak',
-      "That's a habit now. Keep the chain going.",
-      _details(Priority.low),
+      id: _idMilestone,
+      title: '$streak-day streak',
+      body: "That's a habit now. Keep the chain going.",
+      notificationDetails: _details(Priority.low),
     );
   }
 
@@ -388,15 +420,13 @@ class NotificationService {
     }
 
     await _local.zonedSchedule(
-      id,
-      title,
-      body,
-      tz.TZDateTime.from(fireAt, tz.local),
-      _details(priority, actions: payload != null),
+      id: id,
+      title: title,
+      body: body,
+      scheduledDate: tz.TZDateTime.from(fireAt, tz.local),
+      notificationDetails: _details(priority, actions: payload != null),
       payload: payload,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+      androidScheduleMode: _androidMode,
     );
   }
 
@@ -448,15 +478,14 @@ class NotificationService {
     if (!(prefs.getBool('asked_engagement') ?? false)) {
       await prefs.setBool('asked_engagement', true);
       await _local.zonedSchedule(
-        _idEngagement,
-        'Still want these reminders?',
-        'Open TaskTrackr to keep them, or turn them down in Notifications.',
-        tz.TZDateTime.from(
+        id: _idEngagement,
+        title: 'Still want these reminders?',
+        body:
+            'Open TaskTrackr to keep them, or turn them down in Notifications.',
+        scheduledDate: tz.TZDateTime.from(
             DateTime.now().add(const Duration(hours: 1)), tz.local),
-        _details(Priority.defaultPriority),
+        notificationDetails: _details(Priority.defaultPriority),
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
       );
     }
     return priority.value >= Priority.high.value;

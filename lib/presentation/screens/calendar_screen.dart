@@ -29,8 +29,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
   @override
   Widget build(BuildContext context) {
     final m = context.m;
-    final tasks =
-        ref.watch(taskListProvider).valueOrNull ?? const <TaskModel>[];
+    final tasks = ref.watch(taskListProvider).value ?? const <TaskModel>[];
     final byDay = <DateTime, List<TaskModel>>{};
     for (final t in tasks) {
       byDay.putIfAbsent(DateUtils.dateOnly(t.dueDate), () => []).add(t);

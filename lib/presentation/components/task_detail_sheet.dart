@@ -173,8 +173,7 @@ class _TaskDetailSheetState extends ConsumerState<TaskDetailSheet> {
   @override
   Widget build(BuildContext context) {
     final m = context.m;
-    final tasks =
-        ref.watch(allTasksProvider).valueOrNull ?? const <TaskModel>[];
+    final tasks = ref.watch(allTasksProvider).value ?? const <TaskModel>[];
     final task = tasks.where((t) => t.id == widget.taskId).firstOrNull;
     if (task == null) {
       return const SizedBox(height: 200);

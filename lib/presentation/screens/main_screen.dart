@@ -77,7 +77,7 @@ class _MainScreenState extends ConsumerState<MainScreen>
   void _wireNotificationActions() {
     final n = NotificationService();
     n.onReschedule = (id) {
-      final task = (ref.read(allTasksProvider).valueOrNull ?? const [])
+      final task = (ref.read(allTasksProvider).value ?? const [])
           .where((t) => t.id == id)
           .firstOrNull;
       if (task == null) return;
@@ -94,12 +94,11 @@ class _MainScreenState extends ConsumerState<MainScreen>
             target: DateTime(now.year, now.month, now.day + 1),
           );
       // Also carry today's unfinished tasks forward.
-      final open = (ref.read(taskListProvider).valueOrNull ?? const []).where(
-          (t) =>
-              !t.isCompleted &&
-              t.dueDate.year == now.year &&
-              t.dueDate.month == now.month &&
-              t.dueDate.day == now.day);
+      final open = (ref.read(taskListProvider).value ?? const []).where((t) =>
+          !t.isCompleted &&
+          t.dueDate.year == now.year &&
+          t.dueDate.month == now.month &&
+          t.dueDate.day == now.day);
       for (final t in open) {
         ref
             .read(taskActionsProvider)
@@ -117,8 +116,8 @@ class _MainScreenState extends ConsumerState<MainScreen>
   }
 
   void _syncNotifications() {
-    final tasks = ref.read(allTasksProvider).valueOrNull;
-    final user = ref.read(userProfileProvider).valueOrNull;
+    final tasks = ref.read(allTasksProvider).value;
+    final user = ref.read(userProfileProvider).value;
     if (tasks == null) return;
     final settings = user?.notificationSettings ?? NotificationSettings();
     final s = ref.read(momentumProvider);
@@ -181,8 +180,8 @@ class _MainScreenState extends ConsumerState<MainScreen>
       }
     });
     ref.listen(taskListProvider, (prev, next) {
-      final before = prev?.valueOrNull;
-      final tasks = next.valueOrNull;
+      final before = prev?.value;
+      final tasks = next.value;
       // Only on the transition to "all done", not on a list that loads empty.
       if (before == null || tasks == null || tasks.isEmpty) return;
       final wasOpen = before.any((t) => !t.isCompleted);

@@ -27,9 +27,18 @@ class Authenticator {
   // Getter to retrieve the email of the current user, or null if not available
   String? get email => currentUser?.email;
 
+  static const _serverClientId =
+      '141321526342-v3pp5gdojfb9f2meeclha0lj0jv7qh16.apps.googleusercontent.com';
+
+  // google_sign_in 7 is a singleton that must be initialised exactly once.
+  static Future<void>? _gsiInit;
+  Future<void> _ensureGoogleSignIn() => _gsiInit ??=
+      GoogleSignIn.instance.initialize(serverClientId: _serverClientId);
+
   Future<void> logOut() async {
     try {
-      await GoogleSignIn().signOut(); // Sign out from GoogleSignIn
+      await _ensureGoogleSignIn();
+      await GoogleSignIn.instance.signOut(); // Sign out from GoogleSignIn
       await FirebaseAuth.instance.signOut(); // Sign out from FirebaseAuth
     } catch (e) {
       e.log();
@@ -38,31 +47,31 @@ class Authenticator {
 
   Future<LoginState> loginWithGoogle() async {
     try {
-      // Create an instance of GoogleSignIn with the specified scopes
-      final GoogleSignIn googleSignIn = GoogleSignIn(
-        serverClientId:
-            '141321526342-v3pp5gdojfb9f2meeclha0lj0jv7qh16.apps.googleusercontent.com',
-        scopes: ['email'],
-      );
+      await _ensureGoogleSignIn();
 
-      final signInAccount = await googleSignIn.signIn();
-
-      if (signInAccount == null) {
-        log('Google Login: User cancelled sign in');
-        return LoginState.idle;
+      final GoogleSignInAccount signInAccount;
+      try {
+        signInAccount =
+            await GoogleSignIn.instance.authenticate(scopeHint: ['email']);
+      } on GoogleSignInException catch (e) {
+        if (e.code == GoogleSignInExceptionCode.canceled) {
+          log('Google Login: User cancelled sign in');
+          return LoginState.idle;
+        }
+        rethrow;
       }
 
-      final googleAuth = await signInAccount.authentication;
-      log('Google Auth Tokens: idToken=${googleAuth.idToken != null}, accessToken=${googleAuth.accessToken != null}');
+      final googleAuth = signInAccount.authentication;
+      log('Google Auth Tokens: idToken=${googleAuth.idToken != null}');
 
-      if (googleAuth.idToken == null && googleAuth.accessToken == null) {
-        log('Google Login Error: Both tokens are null');
+      if (googleAuth.idToken == null) {
+        log('Google Login Error: idToken is null');
         return LoginState.error;
       }
 
-      // Create OAuth credentials using the access token and ID token
+      // Firebase only needs the ID token; v7 no longer returns an access
+      // token from sign-in (that moved to the authorization client).
       final oAuthCredential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
@@ -132,6 +141,61 @@ class Authenticator {
       log('Error updating display name: $e');
       rethrow;
     }
+  }
+
+  /// Permanently deletes the account and everything stored for it:
+  /// tasks, XP/habit sync data, profile and profile photo, then the Firebase
+  /// Auth user. Required by Google Play for apps that let users sign up.
+  ///
+  /// Asks Google to confirm the account first, because Firebase only deletes
+  /// users who signed in recently. Returns false if the user cancels that.
+  Future<bool> deleteAccount() async {
+    final user = currentUser;
+    if (user == null) return false;
+    final uid = user.uid;
+
+    // 1. Fresh sign-in so user.delete() won't fail with requires-recent-login.
+    await _ensureGoogleSignIn();
+    final GoogleSignInAccount account;
+    try {
+      account = await GoogleSignIn.instance.authenticate(scopeHint: ['email']);
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) return false;
+      rethrow;
+    }
+    await user.reauthenticateWithCredential(
+      GoogleAuthProvider.credential(idToken: account.authentication.idToken),
+    );
+
+    // 2. Data. Tasks go in batches (Firestore caps a batch at 500 writes).
+    final db = FirebaseFirestore.instance;
+    final tasks =
+        await db.collection('tasks').where('userId', isEqualTo: uid).get();
+    for (var i = 0; i < tasks.docs.length; i += 400) {
+      final batch = db.batch();
+      for (final doc in tasks.docs.skip(i).take(400)) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+    }
+    final userDoc = db.collection('users').doc(uid);
+    final momentum = await userDoc.collection('momentum').get();
+    for (final doc in momentum.docs) {
+      await doc.reference.delete();
+    }
+    await userDoc.delete();
+    try {
+      await FirebaseStorage.instance.ref('user_profiles/$uid.jpg').delete();
+    } on FirebaseException catch (e) {
+      if (e.code != 'object-not-found') rethrow;
+    }
+
+    // 3. The auth user itself, then drop the Google session.
+    await user.delete();
+    try {
+      await GoogleSignIn.instance.disconnect();
+    } catch (_) {}
+    return true;
   }
 
   Future<String> uploadProfilePicture(File file) async {

@@ -1,4 +1,5 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:hooks_riverpod/legacy.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -57,7 +58,7 @@ String _fmtMinutes(int m) =>
 /// Rule-based day planner. Runs on-device, so it works offline and never
 /// sends task data anywhere.
 final dayPlanProvider = Provider<DayPlan?>((ref) {
-  final tasks = ref.watch(taskListProvider).valueOrNull;
+  final tasks = ref.watch(taskListProvider).value;
   if (tasks == null) return null;
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);

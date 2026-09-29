@@ -8,7 +8,9 @@ import '../../data/backend/authenticator.dart';
 import '../../theme/app_typography.dart';
 import '../../theme/momentum_tokens.dart';
 import '../components/momentum_ui.dart';
+import '../providers/auth_user_provider.dart';
 import '../providers/momentum_provider.dart';
+import '../providers/theme_provider.dart';
 import '../providers/user_provider.dart';
 
 class AccountSettingsScreen extends ConsumerStatefulWidget {
@@ -25,6 +27,54 @@ class _AccountSettingsScreenState extends ConsumerState<AccountSettingsScreen> {
   bool _seeded = false;
   bool _saving = false;
   bool _uploading = false;
+  bool _deleting = false;
+
+  Future<void> _confirmDelete() async {
+    final m = context.m;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: m.isDark ? const Color(0xFF14141C) : m.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(MomentumTokens.radiusCard)),
+        title: Text('Delete your account?',
+            style: AppTypography.heading2.copyWith(color: m.ink)),
+        content: Text(
+          'Everything you have in TaskTrackr is deleted for good. Google will '
+          'ask you to confirm it’s you.',
+          style: AppTypography.body.copyWith(color: m.inkSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: m.inkSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete everything', style: TextStyle(color: m.danger)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      final uid = ref.read(currentUidProvider);
+      final deleted = await const Authenticator().deleteAccount();
+      if (!deleted) return;
+      // Local copies of XP, habits and focus data for this user.
+      final prefs = ref.read(sharedPreferencesProvider);
+      for (final k in prefs.getKeys().where((k) => k.startsWith('m.$uid.'))) {
+        await prefs.remove(k);
+      }
+      if (mounted) showMomentumToast(context, 'Account deleted');
+    } catch (e) {
+      if (mounted) showMomentumToast(context, 'Could not delete account: $e');
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -71,7 +121,7 @@ class _AccountSettingsScreenState extends ConsumerState<AccountSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final m = context.m;
-    final user = ref.watch(userProfileProvider).valueOrNull;
+    final user = ref.watch(userProfileProvider).value;
     final level = ref.watch(momentumProvider).level;
     if (!_seeded && user != null) {
       _nameController.text = user.displayName;
@@ -177,6 +227,22 @@ class _AccountSettingsScreenState extends ConsumerState<AccountSettingsScreen> {
               expand: true,
               loading: _saving,
               onPressed: _save,
+            ),
+            const SizedBox(height: 40),
+            const SectionLabel('Danger zone'),
+            const SizedBox(height: 8),
+            Text(
+              'Deleting your account permanently removes your tasks, habits, '
+              'XP, streaks and profile from every device. This can’t be undone.',
+              style: AppTypography.caption.copyWith(color: m.inkSecondary),
+            ),
+            const SizedBox(height: 12),
+            MButton(
+              label: 'Delete account',
+              kind: MButtonKind.destructive,
+              expand: true,
+              loading: _deleting,
+              onPressed: _confirmDelete,
             ),
           ],
         ),

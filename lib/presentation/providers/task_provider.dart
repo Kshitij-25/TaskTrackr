@@ -21,7 +21,7 @@ final taskListProvider = Provider<AsyncValue<List<TaskModel>>>((ref) {
 });
 
 final archivedTasksProvider = Provider<List<TaskModel>>((ref) {
-  final tasks = ref.watch(allTasksProvider).valueOrNull ?? const [];
+  final tasks = ref.watch(allTasksProvider).value ?? const [];
   return tasks.where((t) => t.isArchived).toList();
 });
 
