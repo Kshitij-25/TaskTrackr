@@ -51,7 +51,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyC9uAD77eXCNeiXlCt7EqcVd6soJTPTAIU',
-    appId: '1:141321526342:android:7549486bfc3d1db04fbe47',
+    appId: '1:141321526342:android:e310f730c860ebc04fbe47',
     messagingSenderId: '141321526342',
     projectId: 'task-trackr-76f3f',
     storageBucket: 'task-trackr-76f3f.appspot.com',

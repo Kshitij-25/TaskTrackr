@@ -6,16 +6,24 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Release signing. Create android/key.properties (never commit it):
-//   storePassword=…
-//   keyPassword=…
-//   keyAlias=upload
-//   storeFile=/absolute/path/to/upload-keystore.jks
+// Release signing, from android/key.properties (gitignored):
+//   storeFile=src/tasktrackr-keystore.jks   (relative to android/app/)
+//   storePassword=…  keyAlias=…  keyPassword=…
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 val hasReleaseKey = keystorePropertiesFile.exists()
 if (hasReleaseKey) {
     keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+    // Fail early with a readable message instead of an opaque signing error.
+    val missing =
+        listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+            .filter { keystoreProperties.getProperty(it).isNullOrBlank() }
+    require(missing.isEmpty()) {
+        "android/key.properties is missing: ${missing.joinToString()}"
+    }
+    require(file(keystoreProperties.getProperty("storeFile")).exists()) {
+        "Keystore not found at android/app/${keystoreProperties.getProperty("storeFile")}"
+    }
 }
 
 android {
@@ -31,7 +39,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.kshitijcodecraft.tasktrackr"
+        // Must match the existing Google Play listing. The Kotlin package /
+        // namespace stays com.kshitijcodecraft.tasktrackr; only the store ID differs.
+        applicationId = "com.kshitijcodecraft.todoapp"
         // Firebase requires 23+; 24 keeps 99%+ of active devices.
         minSdk = 24
         // Google Play requires targeting a recent API level for new apps and updates.
